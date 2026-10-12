@@ -15,6 +15,8 @@ Variables d'entorn:
     SEC_USER_AGENT         Capçalera User-Agent per a la SEC, p. ex.
                            "Nom Cognom correu@exemple.com" (obligatòria).
     ANTHROPIC_MODEL        Model a utilitzar (opcional, per defecte claude-sonnet-5-5).
+    ANTHROPIC_WORKSPACE_ID ID del workspace (opcional; només cal si la clau de l'API
+                           no està associada a cap workspace).
     MAX_ENTRIES_PER_FEED   Filings més recents a revisar per feed (opcional, per defecte 1).
 """
 
@@ -518,7 +520,10 @@ def main() -> int:
 
     processed = set(state["processed"])
     session = sec_session(sec_user_agent)
-    client = anthropic.Anthropic()
+    workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    client = anthropic.Anthropic(
+        default_headers={"anthropic-workspace-id": workspace_id} if workspace_id else None,
+    )
     errors = 0
     new_count = 0
 

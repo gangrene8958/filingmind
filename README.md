@@ -37,6 +37,7 @@ Opcional, a la pestanya **Variables** (no secrets):
 | Variable | Descripció |
 |---|---|
 | `ANTHROPIC_MODEL` | Model de Claude. Per defecte `claude-sonnet-5-5`. |
+| `ANTHROPIC_WORKSPACE_ID` | Només si la clau de l'API no està associada a cap workspace (error 400 "not scoped to a workspace"). És l'ID del workspace (`wrkspc_...`) que surt a la consola d'Anthropic. |
 
 ### 3. Permisos del workflow
 
