@@ -37,6 +37,8 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup, Comment
 
+from verify_numbers import UnverifiedNumber, find_unverified_numbers
+
 # ---------------------------------------------------------------------------
 # Configuració
 # ---------------------------------------------------------------------------
@@ -83,8 +85,25 @@ litigis, canvis comptables, advertències de going concern o qualsevol altre sen
 preocupant. Si no n'hi ha cap de rellevant, digues-ho explícitament.
 
 Fes servir text pla amb guions per a les llistes (sense taules ni Markdown \
-complex), perquè el resum es llegirà a Telegram. No inventis dades que no \
-apareguin al document."""
+complex), perquè el resum es llegirà a Telegram.
+
+Regles per a les xifres (es verificaran automàticament contra el document):
+- Fes servir només xifres que apareguin literalment al document.
+- Copia-les amb la notació del document (anglesa: 391,035 o 12.5%), indicant \
+la unitat ($ milions, %, etc.). Pots arrodonir, però no canviar el valor.
+- No calculis xifres noves (creixements, diferències, ràtios) si el document \
+no les dona. Si cal, descriu la tendència amb paraules.
+- No inventis dades que no apareguin al document."""
+
+CORRECTION_PROMPT = """Una verificació automàtica no ha trobat aquestes xifres \
+del teu resum enlloc del document:
+
+{numbers}
+
+Revisa-les contra el document. Si una xifra és correcta però l'has escrita amb \
+un altre format, escriu-la tal com apareix al document. Si l'has calculat o no \
+surt al document, elimina-la o substitueix-la per una xifra que hi aparegui. \
+Respon només amb el resum complet corregit, amb la mateixa estructura."""
 
 
 class ConfigError(Exception):
@@ -366,22 +385,14 @@ def clean_sec_html(html: str | bytes, form_type: str = "10-K") -> str:
 # Anàlisi amb l'API d'Anthropic
 # ---------------------------------------------------------------------------
 
-def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, str],
-                     text: str) -> str | None:
-    """Genera el resum executiu d'un filing amb Claude. Retorna None si falla."""
-    user_content = (
-        f"Empresa: {filing['ticker']}\n"
-        f"Tipus de filing: {filing['form_type']}\n"
-        f"Títol: {filing['title']}\n"
-        f"Data: {filing['updated']}\n\n"
-        f"<document>\n{text}\n</document>"
-    )
-
+def call_claude(client: anthropic.Anthropic, model: str,
+                messages: list[dict[str, Any]]) -> Any | None:
+    """Fa una crida a Claude i retorna el missatge complet, o None si falla."""
     params: dict[str, Any] = {
         "model": model,
         "max_tokens": 16000,
         "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": user_content}],
+        "messages": messages,
         # Raonament adaptatiu: el model decideix quant pensar abans de respondre.
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": "high"},
@@ -406,13 +417,85 @@ def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, 
         return None
 
     if message.stop_reason == "refusal":
-        log.error("El model ha rebutjat analitzar %s", filing["id"])
+        log.error("El model ha rebutjat la petició")
         return None
     if message.stop_reason == "max_tokens":
         log.warning("La resposta s'ha tallat per max_tokens")
+    return message
 
-    summary = "\n".join(b.text for b in message.content if b.type == "text").strip()
-    return summary or None
+
+def message_text(message: Any) -> str:
+    """Text de resposta d'un missatge (sense els blocs de raonament)."""
+    return "\n".join(b.text for b in message.content if b.type == "text").strip()
+
+
+def format_unverified(unverified: list[UnverifiedNumber]) -> str:
+    """Llista llegible de xifres no verificades."""
+    return "\n".join(f"- {u.token} (…{u.context}…)" for u in unverified)
+
+
+def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, str],
+                     text: str) -> str | None:
+    """Genera el resum executiu d'un filing i n'audita les xifres.
+
+    1. Claude genera el resum.
+    2. Es comprova que cada xifra del resum aparegui al document.
+    3. Si n'hi ha alguna que no hi surt, es demana a Claude que corregeixi el
+       resum (una sola vegada) i es torna a comprovar.
+    4. Si encara en queden, el resum s'envia amb un avís que les llista.
+
+    Retorna None si la crida a l'API falla.
+    """
+    header = (
+        f"Empresa: {filing['ticker']}\n"
+        f"Tipus de filing: {filing['form_type']}\n"
+        f"Títol: {filing['title']}\n"
+        f"Data: {filing['updated']}\n\n"
+    )
+    messages: list[dict[str, Any]] = [{
+        "role": "user",
+        "content": [
+            # El document es desa a la memòria cau: si cal corregir el resum,
+            # la segona crida no torna a pagar tot el document a preu complet.
+            {"type": "text", "text": f"<document>\n{text}\n</document>",
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": header + "Redacta el resum executiu d'aquest filing."},
+        ],
+    }]
+
+    message = call_claude(client, model, messages)
+    if message is None:
+        return None
+    summary = message_text(message)
+    if not summary:
+        return None
+
+    unverified = find_unverified_numbers(summary, text)
+    if not unverified:
+        log.info("Verificació de xifres: totes les xifres apareixen al document")
+        return summary
+
+    log.warning("Verificació de xifres: %d xifres no apareixen al document; es demana correcció:\n%s",
+                len(unverified), format_unverified(unverified))
+    messages += [
+        {"role": "assistant", "content": message.content},
+        {"role": "user", "content": CORRECTION_PROMPT.format(numbers=format_unverified(unverified))},
+    ]
+    correction = call_claude(client, model, messages)
+    corrected = message_text(correction) if correction is not None else ""
+    if corrected:
+        summary = corrected
+        unverified = find_unverified_numbers(summary, text)
+
+    if not unverified:
+        log.info("Verificació de xifres: el resum corregit ja no té xifres sense verificar")
+        return summary
+
+    log.warning("Verificació de xifres: queden %d xifres sense verificar", len(unverified))
+    return (
+        f"{summary}\n\n⚠️ Xifres no verificades: no s'han trobat al document, "
+        f"revisa-les abans de fer-les servir:\n{format_unverified(unverified)}"
+    )
 
 
 # ---------------------------------------------------------------------------

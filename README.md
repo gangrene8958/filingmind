@@ -11,6 +11,17 @@ Audita automàticament els nous filings **10-K** i **10-Q** de la SEC per a una 
 5. El resum s'envia a Telegram (dividit en blocs de 4.096 caràcters si cal) i el filing es marca com a processat.
 6. El workflow fa commit de `processed_filings.json` perquè l'estat es mantingui entre execucions.
 
+### Verificació de xifres
+
+Abans d'enviar cada resum, `verify_numbers.py` comprova que totes les xifres del resum apareguin al document original. Accepta arrodoniments i canvis d'escala: per exemple, "$391.0 billion" es dona per bo si el document diu "391,035" milions. S'ignoren els anys, els comptadors petits ("3 riscos") i les referències com "10-K" o "Item 1A".
+
+- Si alguna xifra no surt al document, es demana a Claude que corregeixi el resum, només una vegada.
+- Si després de la correcció encara en queda alguna, el resum s'envia igualment però amb un avís "⚠️ Xifres no verificades" que les llista.
+
+La comprovació és determinista, sense cap LLM. Té dues limitacions: marca com a no verificades les xifres calculades pel model (el prompt li prohibeix calcular-ne), i les xifres petites, com els percentatges, gairebé sempre troben alguna coincidència en un document llarg. Per això és especialment útil per a imports.
+
+El workflow executa els tests (`pytest tests`) abans de processar els filings.
+
 Si un filing falla (xarxa, API, Telegram), no es marca com a processat i es torna a intentar a la següent execució.
 
 ## Configuració

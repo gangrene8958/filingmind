@@ -35,6 +35,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Executar els tests (verificador de xifres)
+        run: |
+          pip install pytest
+          python -m pytest -q tests
+
       - name: Executar l'auditoria de filings
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
