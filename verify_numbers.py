@@ -153,3 +153,13 @@ def find_unverified_numbers(summary: str, source_text: str) -> list[UnverifiedNu
             unverified.append(UnverifiedNumber(token=token, context=context))
 
     return unverified
+
+
+def checked_numbers(summary: str) -> list[str]:
+    """Xifres del resum que la verificació comprova (sense anys, comptadors ni referències)."""
+    tokens: list[str] = []
+    for match in NUMBER_RE.finditer(summary):
+        token = match.group()
+        if token not in tokens and not _is_ignorable(token, summary, match.start(), match.end()):
+            tokens.append(token)
+    return tokens

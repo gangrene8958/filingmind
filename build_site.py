@@ -3,12 +3,16 @@
 Llegeix la cartera (`portfolio.json`) i els últims resums desats
 (`data/filings.json`) i escriu a `site/`:
 
-    index.html        Inici: una targeta per empresa de la cartera.
+    index.html        Inici: llibre de la cartera, punts a vigilar i calendari.
     <ticker>.html     Pàgina de cada empresa amb el resum del 10-K i del 10-Q.
+    assets/           Full d'estils i script compartits (de `site_assets/`).
 
 Les pestanyes i les pàgines surten de `portfolio.json`, de manera que afegir o
 treure un ticker de la cartera afegeix o treu la seva pàgina a la propera
 generació. Les empreses que encara no tenen cap resum surten com a pendents.
+
+Tot és determinista: el generador només reorganitza el text dels resums (no
+calcula xifres noves) i les pàgines funcionen també sense JavaScript.
 
 Ús:
     python build_site.py [directori_de_sortida]
@@ -21,84 +25,45 @@ import json
 import re
 import shutil
 import sys
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from verify_numbers import checked_numbers
 
 BASE_DIR = Path(__file__).resolve().parent
 PORTFOLIO_FILE = BASE_DIR / "portfolio.json"
 DATA_FILE = BASE_DIR / "data" / "filings.json"
+ASSETS_DIR = BASE_DIR / "site_assets"
 DEFAULT_OUTPUT = BASE_DIR / "site"
 FORM_TYPES = ("10-K", "10-Q")
-FORM_LABELS = {"10-K": "Informe anual (10-K)", "10-Q": "Informe trimestral (10-Q)"}
+FORM_LABELS = {"10-K": "Informe anual", "10-Q": "Informe trimestral"}
+QUARTER_DAYS = 91  # Interval aproximat entre presentacions per estimar la propera.
 
-CSS = """
-:root {
-  --bg: #f6f7f9; --surface: #ffffff; --text: #1b1f24; --muted: #5d6673;
-  --border: #dde1e6; --accent: #1f5fbf; --accent-soft: #e8f0fc;
-  --ok: #1d7a46; --ok-soft: #e5f4ec; --warn: #9a5b00; --warn-soft: #fdf1dc;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111418; --surface: #1a1e24; --text: #e6e9ed; --muted: #9aa3ae;
-    --border: #2c323a; --accent: #7aa7ec; --accent-soft: #1d2a3d;
-    --ok: #6fcf97; --ok-soft: #173025; --warn: #f2b45a; --warn-soft: #33270f;
-  }
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--text);
-  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
-a { color: var(--accent); }
-header { background: var(--surface); border-bottom: 1px solid var(--border); }
-.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
-.brand { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; padding: 18px 0 10px; }
-.brand h1 { margin: 0; font-size: 22px; }
-.brand span { color: var(--muted); font-size: 14px; }
-nav.tabs { display: flex; gap: 4px; overflow-x: auto; }
-nav.tabs a {
-  padding: 8px 14px; border-radius: 8px 8px 0 0; text-decoration: none;
-  color: var(--muted); font-weight: 600; white-space: nowrap;
-  border-bottom: 2px solid transparent;
-}
-nav.tabs a:hover { color: var(--text); }
-nav.tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
-main.wrap { padding-top: 24px; padding-bottom: 48px; }
-.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); }
-.card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  padding: 18px; text-decoration: none; color: inherit; display: block;
-}
-a.card:hover { border-color: var(--accent); }
-.card h2 { margin: 0 0 12px; font-size: 24px; }
-.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0;
-       border-top: 1px solid var(--border); font-size: 14px; }
-.row .label { color: var(--muted); white-space: nowrap; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
-         font-weight: 600; white-space: nowrap; }
-.badge.ok { background: var(--ok-soft); color: var(--ok); }
-.badge.warn { background: var(--warn-soft); color: var(--warn); }
-.badge.pending { background: var(--accent-soft); color: var(--muted); }
-.filings { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); }
-.filing { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-          padding: 20px 22px; min-width: 0; }
-.filing > h2 { margin: 0 0 4px; font-size: 20px; }
-.meta { color: var(--muted); font-size: 14px; margin-bottom: 12px; }
-.summary h3 { font-size: 16px; margin: 18px 0 6px; }
-.summary ul { margin: 0 0 8px; padding-left: 20px; }
-.summary p { margin: 0 0 8px; }
-.alert { background: var(--warn-soft); color: var(--text); border-left: 4px solid var(--warn);
-         border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 14px; }
-.alert strong { color: var(--warn); }
-.empty { color: var(--muted); font-style: italic; }
-footer.wrap { color: var(--muted); font-size: 13px; padding-bottom: 32px; }
-@media (max-width: 480px) {
-  .filing { padding: 16px; }
-}
-"""
+MONTHS = ["gener", "febrer", "març", "abril", "maig", "juny", "juliol", "agost",
+          "setembre", "octubre", "novembre", "desembre"]
+MONTHS_SHORT = ["gen", "febr", "març", "abr", "maig", "juny", "jul", "ag",
+                "set", "oct", "nov", "des"]
+WEEKDAYS = ["Dilluns", "Dimarts", "Dimecres", "Dijous", "Divendres", "Dissabte", "Diumenge"]
+
+CHAPTER_KINDS = [  # (paraula clau del títol, tipus, etiqueta curta)
+    ("negoci", "business", "Negoci"),
+    ("risc", "risks", "Riscos"),
+    ("estrat", "strategy", "Estratègia"),
+    ("alert", "flags", "Alertes"),
+    ("red flag", "flags", "Alertes"),
+]
+
+FONTS_URL = ("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&"
+             "family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&"
+             "family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;"
+             "1,6..72,400&display=swap")
 
 
+# --------------------------------------------------------------------------- #
+# Utilitats
+# --------------------------------------------------------------------------- #
 def load_json(path: Path, default: Any) -> Any:
     """Carrega un JSON o retorna `default` si no existeix o està buit."""
     try:
@@ -108,21 +73,241 @@ def load_json(path: Path, default: Any) -> Any:
     return json.loads(text) if text else default
 
 
+def esc(text: Any) -> str:
+    """Escapa text per a HTML (també les cometes, per als atributs)."""
+    return html.escape(str(text), quote=True)
+
+
 def page_name(ticker: str) -> str:
     """Nom del fitxer HTML d'una empresa (només caràcters segurs)."""
     return re.sub(r"[^a-z0-9.-]", "-", ticker.lower()) + ".html"
 
 
-def inline(text: str) -> str:
-    """Escapa el text i converteix **negreta** en <strong>."""
-    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html.escape(text))
+def parse_date(value: str | None) -> date | None:
+    """Converteix "2025-10-31" (o un ISO amb hora) en una data."""
+    try:
+        return date.fromisoformat((value or "")[:10])
+    except ValueError:
+        return None
 
 
-def render_summary(summary: str) -> str:
-    """Converteix el resum en text pla a HTML.
+def _de(month: str) -> str:
+    """Preposició "de" apostrofada davant de vocal (d'octubre, de març)."""
+    return f"d'{month}" if month[0] in "aeiou" else f"de {month}"
 
-    Les línies numerades ("1. Evolució del negoci...") passen a títols, les que
-    comencen amb guió a llistes (les sagnades, a subllistes) i la resta a paràgrafs.
+
+def fmt_date(day: date | None) -> str:
+    """Data llarga en català: "31 d'octubre de 2025"."""
+    if not day:
+        return "—"
+    return f"{day.day} {_de(MONTHS[day.month - 1])} de {day.year}"
+
+
+def fmt_date_short(day: date | None) -> str:
+    """Data curta: "31 oct. 2025"."""
+    if not day:
+        return "—"
+    return f"{day.day} {MONTHS_SHORT[day.month - 1]}. {day.year}"
+
+
+def fmt_age(day: date | None, today: date) -> str:
+    """Antiguitat relativa: "avui", "fa 3 dies", "fa 5 mesos"."""
+    if not day:
+        return ""
+    days = (today - day).days
+    if days <= 0:
+        return "avui"
+    if days == 1:
+        return "ahir"
+    if days < 60:
+        return f"fa {days} dies"
+    months = round(days / 30.4)
+    return f"fa {months} mesos" if months < 24 else f"fa {round(days / 365)} anys"
+
+
+def smart_title(text: str) -> str:
+    """Passa un nom en majúscules a format títol ("AMAZON.COM, INC." -> "Amazon.com, Inc.")."""
+    if text != text.upper():
+        return text
+    return " ".join(word[:1].upper() + word[1:].lower() for word in text.split())
+
+
+def sentence_case(text: str) -> str:
+    """Títols en majúscules a format frase, conservant sigles entre parèntesis."""
+    if text != text.upper():
+        return text
+    lowered = text.lower()
+    return lowered[:1].upper() + lowered[1:]
+
+
+# --------------------------------------------------------------------------- #
+# Lectura del resum
+# --------------------------------------------------------------------------- #
+@dataclass
+class Chapter:
+    """Un apartat numerat del resum (negoci, riscos, estratègia, alertes)."""
+    number: int
+    title: str
+    kind: str
+    label: str
+    lines: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Kpi:
+    """Xifra destacada extreta literalment d'una línia del resum."""
+    label: str
+    value: str
+    delta: str | None = None
+    direction: str = "flat"  # up, down o flat
+
+
+HEADING_RE = re.compile(r"^(?:#+\s*)?\**\s*(\d)[.)]\s+(.{3,110}?)\s*\**:?\s*$")
+LEDE_PREFIX_RE = re.compile(r"^\**\s*RESUM EXECUTIU\s*[-–—:]?\s*", re.IGNORECASE)
+
+
+def parse_summary(summary: str) -> tuple[list[str], list[Chapter]]:
+    """Separa el resum en línies d'entrada (abans del primer apartat) i apartats."""
+    lede: list[str] = []
+    chapters: list[Chapter] = []
+    for raw in summary.splitlines():
+        heading = HEADING_RE.match(raw.strip())
+        if heading and not raw.lstrip().startswith(("-", "•", "*  ")):
+            title = sentence_case(heading.group(2).strip("* ").rstrip(":"))
+            kind, label = "other", title
+            for key, chapter_kind, short in CHAPTER_KINDS:
+                if key in title.lower():
+                    kind, label = chapter_kind, short
+                    break
+            chapters.append(Chapter(int(heading.group(1)), title, kind, label))
+        elif chapters:
+            chapters[-1].lines.append(raw)
+        else:
+            lede.append(raw)
+    return lede, chapters
+
+
+def company_name(ticker: str, records: list[dict[str, Any]]) -> str:
+    """Nom de l'empresa tal com surt a la primera línia del resum ("Apple Inc. (AAPL)")."""
+    pattern = re.compile(rf"([A-Za-z][\w.,&'’ -]{{1,60}}?)\s*\({re.escape(ticker)}\)")
+    candidates = []
+    for record in records:
+        for line in (record.get("summary") or "").splitlines()[:2]:
+            match = pattern.search(LEDE_PREFIX_RE.sub("", line.strip()))
+            if match:
+                candidates.append(match.group(1).strip(" ,-–"))
+    if not candidates:
+        return ""
+    mixed = [c for c in candidates if c != c.upper()]  # Preferim "Apple Inc." a "APPLE INC.".
+    return smart_title(max(mixed or candidates, key=len))
+
+
+def lede_parts(ticker: str, lede: list[str]) -> tuple[str, list[str]]:
+    """Retorna la frase d'entrada (període del filing) i les notes prèvies."""
+    lines = [line.strip() for line in lede if line.strip()]
+    dek_lines = [line for line in lines if not line.lower().startswith("nota")]
+    notes = [line for line in lines if line.lower().startswith("nota")]
+    dek = " · ".join(dek_lines)
+    dek = LEDE_PREFIX_RE.sub("", dek)
+    # Es treu el nom i el ticker, que ja surten al titular de la pàgina.
+    dek = re.sub(rf"^.*?\b{re.escape(ticker)}\b\)?\s*[,–—-]?\s*", "", dek, count=1) or dek
+    dek = dek.strip(" ·,–—-")
+    return dek[:1].upper() + dek[1:], notes
+
+
+KPI_RE = re.compile(
+    r"^(?P<label>[^:$\d][^:$]{2,44}):\s*"
+    r"(?P<value>\$\(?\d[\d,.]*\)?(?:\s+(?:mil milions|milions|billion|million))?)"
+    r"(?P<rest>.*)$"
+)
+DELTA_PATTERNS = [
+    (re.compile(r"^\s*\(\((\d+(?:[.,]\d+)?)\)%\)"), -1),          # ((4)%)
+    (re.compile(r"^\s*\(([+-]?\d+(?:[.,]\d+)?)%\)"), 0),            # (+10%) / (-1%)
+    (re.compile(r"^\s*\((\d+(?:[.,]\d+)?)% (?:de creixement|més)\)"), 1),  # (18% de creixement)
+    (re.compile(r"^\s*,\s*([+-]\d+(?:[.,]\d+)?)%"), 0),            # , +18%
+    (re.compile(r"\bun (\d+(?:[.,]\d+)?)% més"), 1),
+    (re.compile(r"creixement (?:és )?del (\d+(?:[.,]\d+)?)%"), 1),
+    (re.compile(r"\bun (\d+(?:[.,]\d+)?)% menys"), -1),
+]
+
+
+def _delta(rest: str) -> tuple[str | None, str]:
+    """Busca la variació que el resum dona just després d'una xifra (sense calcular-la)."""
+    for pattern, sign in DELTA_PATTERNS:
+        match = pattern.search(rest)
+        if not match:
+            continue
+        raw = match.group(1)
+        if sign == 0:
+            sign = -1 if raw.startswith("-") else 1
+            raw = raw.lstrip("+-")
+        if float(raw.replace(",", ".")) == 0:
+            return f"{raw}%", "flat"
+        return (f"+{raw}%", "up") if sign > 0 else (f"−{raw}%", "down")
+    return None, "flat"
+
+
+def _compact_value(value: str) -> str:
+    """Escurça la unitat sense tocar la xifra: "$416,161 milions" -> "$416,161 M"."""
+    value = re.sub(r"\s+(?:mil milions|billion)$", " mil M", value)
+    return re.sub(r"\s+(?:milions|million)$", " M", value)
+
+
+def extract_kpis(chapters: list[Chapter], limit: int = 4) -> list[Kpi]:
+    """Primeres xifres "Etiqueta: $valor" de l'apartat de negoci, tal com surten al resum."""
+    business = next((c for c in chapters if c.kind == "business"), chapters[0] if chapters else None)
+    if not business:
+        return []
+    kpis: list[Kpi] = []
+    seen: set[str] = set()
+    for raw in business.lines:
+        line = re.sub(r"^[-•*]\s+", "", raw.strip()).replace("**", "")
+        for sentence in re.split(r"(?<=[\w)%])\.\s+(?=[A-ZÀ-Ú])", line):
+            match = KPI_RE.match(sentence.strip())
+            if not match:
+                continue
+            label = match.group("label").strip()
+            if label.lower() in seen or label.lower().startswith(("per ", "nota", "en ", "als ", "a ")):
+                continue
+            delta, direction = _delta(match.group("rest"))
+            kpis.append(Kpi(label[:1].upper() + label[1:], _compact_value(match.group("value")),
+                            delta, direction))
+            seen.add(label.lower())
+            if len(kpis) == limit:
+                return kpis
+    return kpis
+
+
+# --------------------------------------------------------------------------- #
+# Renderitzat del text
+# --------------------------------------------------------------------------- #
+FIGURE_RE = (
+    r"\$\(?\d[\d,.]*\)?(?:\s+(?:mil milions|milions|billion|million))?"
+    r"|\(\(\d[\d,.]*\)%\)"
+    r"|[+−-]?\d[\d,.]*\s?%"
+)
+
+
+def inline(text: str, flagged: list[str] | None = None) -> str:
+    """Escapa el text, aplica **negreta** i marca les xifres (les no verificades, en vermell)."""
+    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html.escape(text, quote=False))
+    tokens = sorted({html.escape(t, quote=False) for t in flagged or [] if t}, key=len, reverse=True)
+    alternatives = [rf"(?<![\d,.]){re.escape(t)}(?![\d])" for t in tokens] + [FIGURE_RE]
+
+    def mark(match: re.Match[str]) -> str:
+        figure = match.group()
+        if any(token in figure for token in tokens):
+            return f'<mark class="fig fig--flag" title="No s\'ha trobat al document">{figure}</mark>'
+        return f'<span class="fig">{figure}</span>'
+
+    return re.sub("|".join(alternatives), mark, out)
+
+
+def render_lines(lines: list[str], flagged: list[str] | None = None) -> str:
+    """Converteix línies de text pla en HTML.
+
+    Les que comencen amb guió passen a llistes (les sagnades, a subllistes), les
+    que comencen amb "Nota" a notes i la resta a paràgrafs.
     """
     parts: list[str] = []
     depth = 0  # Nivells de llista oberts.
@@ -133,7 +318,7 @@ def render_summary(summary: str) -> str:
             parts.append("</li></ul>")
             depth -= 1
 
-    for raw in summary.splitlines():
+    for raw in lines:
         line = raw.strip()
         bullet = re.match(r"^[-•*]\s+(.*)", line)
         if bullet:
@@ -144,141 +329,432 @@ def render_summary(summary: str) -> str:
             else:
                 close_lists(level)
                 parts.append("</li>")
-            parts.append(f"<li>{inline(bullet.group(1))}")
+            parts.append(f"<li>{inline(bullet.group(1), flagged)}")
             continue
         close_lists(0)
         if not line:
             continue
-        heading = re.match(r"^(?:#+\s*)?(\d+\.\s+.+)$", line)
-        if heading and len(line) < 120:
-            parts.append(f"<h3>{inline(heading.group(1).rstrip(':'))}</h3>")
-        else:
-            parts.append(f"<p>{inline(line)}</p>")
+        css = ' class="note"' if line.lower().startswith("nota") else ""
+        parts.append(f"<p{css}>{inline(line, flagged)}</p>")
     close_lists(0)
     return "\n".join(parts)
 
 
-def status_badge(record: dict[str, Any] | None) -> str:
-    """Etiqueta d'estat de la verificació de xifres d'un filing."""
+def render_summary(summary: str, flagged: list[str] | None = None) -> str:
+    """Resum complet en HTML senzill (títols i cos), útil per a proves i vistes curtes."""
+    lede, chapters = parse_summary(summary)
+    parts = [render_lines(lede, flagged)] if any(l.strip() for l in lede) else []
+    for chapter in chapters:
+        parts.append(f"<h3>{esc(chapter.title)}</h3>")
+        parts.append(render_lines(chapter.lines, flagged))
+    return "\n".join(parts)
+
+
+def verification(record: dict[str, Any]) -> tuple[int, int]:
+    """(xifres comprovades, xifres no trobades al document) d'un resum."""
+    flagged = len(record.get("unverified") or [])
+    total = len(checked_numbers(record.get("summary") or ""))
+    return max(total, flagged), flagged
+
+
+def stamp(record: dict[str, Any] | None) -> str:
+    """Segell petit amb l'estat de la verificació, per al llibre de la cartera."""
     if not record:
-        return '<span class="badge pending">Pendent</span>'
-    count = len(record.get("unverified") or [])
-    if count:
-        noun = "xifra" if count == 1 else "xifres"
-        return f'<span class="badge warn">{count} {noun} per revisar</span>'
-    return '<span class="badge ok">Xifres verificades</span>'
+        return '<span class="stamp stamp--pending">Pendent</span>'
+    total, flagged = verification(record)
+    if flagged:
+        return (f'<span class="stamp stamp--flag" title="Xifres per revisar">'
+                f"{flagged} per revisar</span>")
+    return f'<span class="stamp stamp--ok" title="Xifres contrastades amb el document">{total}/{total}</span>'
 
 
-def layout(title: str, tickers: list[str], active: str | None, body: str,
+# --------------------------------------------------------------------------- #
+# Plantilla
+# --------------------------------------------------------------------------- #
+def masthead(tickers: list[str], active: str | None, today: date) -> str:
+    """Capçalera amb la data, el nom i les pestanyes de la cartera."""
+    weekday = WEEKDAYS[today.weekday()]
+    tabs = []
+    for ticker in [None, *tickers]:
+        href = "index.html" if ticker is None else page_name(ticker)
+        current = ' aria-current="page"' if ticker == active else ""
+        text = "Cartera" if ticker is None else esc(ticker)
+        tabs.append(f'<a href="{href}"{current}>{text}</a>')
+    return f"""<header class="mast">
+  <div class="wrap mast__top">
+    <p class="mast__date">{weekday}, {fmt_date(today)}</p>
+    <a class="mast__logo" href="index.html">Filing<span>Mind</span></a>
+    <p class="mast__tag">Quadern d'auditoria de la cartera</p>
+  </div>
+</header>
+<nav class="tabs" aria-label="Empreses de la cartera"><div class="wrap tabs__row">{"".join(tabs)}</div></nav>"""
+
+
+def layout(title: str, tickers: list[str], active: str | None, body: str, today: date,
            generated: str) -> str:
     """Plantilla comuna: capçalera, pestanyes, contingut i peu."""
-    home_cls = ' class="active"' if active is None else ""
-    tabs = [f'<a href="index.html"{home_cls}>Inici</a>']
-    for ticker in tickers:
-        cls = ' class="active"' if ticker == active else ""
-        tabs.append(f'<a href="{page_name(ticker)}"{cls}>{html.escape(ticker)}</a>')
     return f"""<!doctype html>
 <html lang="ca">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)}</title>
-<style>{CSS}</style>
+<title>{esc(title)}</title>
+<meta name="description" content="Resums dels últims 10-K i 10-Q de les empreses de la cartera.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{FONTS_URL}">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2316150f'/%3E%3Cpath d='M9 7h14v4H14v4h8v4h-8v6H9z' fill='%23f3efe6'/%3E%3Crect x='19' y='21' width='4' height='4' fill='%23d2401e'/%3E%3C/svg%3E">
+<script>document.documentElement.classList.add("js")</script>
+<script src="assets/app.js" defer></script>
 </head>
 <body>
-<header>
-  <div class="wrap">
-    <div class="brand"><h1>FilingMind</h1><span>Resums dels últims 10-K i 10-Q de la cartera</span></div>
-    <nav class="tabs">{"".join(tabs)}</nav>
-  </div>
-</header>
+{masthead(tickers, active, today)}
 <main class="wrap">
 {body}
 </main>
-<footer class="wrap">Actualitzat el {generated} · Resums generats amb Claude a partir dels filings de la SEC.</footer>
+<footer class="foot">
+  <div class="wrap foot__row">
+    <p>Dades extretes dels informes publicats a EDGAR (SEC). Les xifres de cada resum es contrasten automàticament amb el document original.</p>
+    <p class="foot__stamp">Actualitzat el {generated}</p>
+  </div>
+</footer>
 </body>
 </html>
 """
 
 
-def render_index(tickers: list[str], data: dict[str, Any], generated: str) -> str:
-    """Pàgina d'inici amb una targeta per empresa."""
-    if not tickers:
-        body = '<p class="empty">La cartera és buida. Afegeix tickers a portfolio.json.</p>'
-        return layout("FilingMind", tickers, None, body, generated)
+# --------------------------------------------------------------------------- #
+# Pàgina d'inici
+# --------------------------------------------------------------------------- #
+def latest_record(records: dict[str, Any]) -> dict[str, Any] | None:
+    """El filing més recent d'una empresa (10-K o 10-Q)."""
+    present = [r for r in (records.get(f) for f in FORM_TYPES) if r]
+    return max(present, key=lambda r: r.get("filed", ""), default=None)
 
-    cards = []
-    for ticker in tickers:
-        rows = []
+
+def next_filing(records: dict[str, Any], today: date) -> date | None:
+    """Estimació de la propera presentació: un trimestre després de l'última."""
+    last = latest_record(records)
+    day = parse_date(last.get("filed")) if last else None
+    if not day:
+        return None
+    day += timedelta(days=QUARTER_DAYS)
+    while day < today:
+        day += timedelta(days=QUARTER_DAYS)
+    return day
+
+
+def timeline_svg(tickers: list[str], data: dict[str, Any], today: date) -> str:
+    """Calendari SVG: presentacions dels últims 12 mesos i la propera estimada."""
+    start = date(today.year - 1, today.month, 1)
+    end_month = today.month + 4
+    end = date(today.year + (end_month - 1) // 12, (end_month - 1) % 12 + 1, 1)
+    left, right, top, row_h = 76, 884, 40, 38
+    height = top + row_h * max(len(tickers), 1) + 14
+    span = (end - start).days
+
+    def x(day: date) -> float:
+        return round(left + (right - left) * (day - start).days / span, 1)
+
+    parts = [f'<svg class="cal" viewBox="0 0 900 {height}" role="img" '
+             f'aria-labelledby="cal-title"><title id="cal-title">Calendari de presentacions</title>']
+    month = start
+    while month < end:
+        mx = x(month)
+        parts.append(f'<line class="cal__grid" x1="{mx}" y1="{top - 10}" x2="{mx}" y2="{height - 8}"/>')
+        label = MONTHS_SHORT[month.month - 1] + (f" {month.year % 100:02d}" if month.month == 1 else "")
+        parts.append(f'<text class="cal__month" x="{mx + 4}" y="{top - 16}">{label}</text>')
+        month = date(month.year + month.month // 12, month.month % 12 + 1, 1)
+    tx = x(today)
+    parts.append(f'<line class="cal__today" x1="{tx}" y1="{top - 30}" x2="{tx}" y2="{height - 8}"/>'
+                 f'<text class="cal__today-label" x="{tx + 5}" y="{top - 30}">avui</text>')
+    for row, ticker in enumerate(tickers):
+        cy = top + row_h * row + row_h / 2
+        records = data.get(ticker, {})
+        parts.append(f'<a href="{page_name(ticker)}"><text class="cal__ticker" x="0" y="{cy + 5}">'
+                     f'{esc(ticker)}</text></a>')
+        parts.append(f'<line class="cal__lane" x1="{left}" y1="{cy}" x2="{right}" y2="{cy}"/>')
         for form in FORM_TYPES:
-            record = data.get(ticker, {}).get(form)
-            date = html.escape(record["filed"]) if record else "—"
-            rows.append(
-                f'<div class="row"><span class="label">{form} · {date}</span>'
-                f"{status_badge(record)}</div>"
-            )
-        cards.append(
-            f'<a class="card" href="{page_name(ticker)}"><h2>{html.escape(ticker)}</h2>'
-            f'{"".join(rows)}</a>'
+            record = records.get(form)
+            day = parse_date(record.get("filed")) if record else None
+            if not day or day < start:
+                continue
+            px = x(day)
+            tip = f"<title>{esc(ticker)} · {form} · {fmt_date(day)}</title>"
+            if form == "10-K":
+                parts.append(f'<rect class="cal__k" x="{px - 6}" y="{cy - 6}" width="12" height="12" '
+                             f'transform="rotate(45 {px} {cy})">{tip}</rect>')
+            else:
+                parts.append(f'<circle class="cal__q" cx="{px}" cy="{cy}" r="6">{tip}</circle>')
+        upcoming = next_filing(records, today)
+        if upcoming and upcoming < end:
+            px = x(upcoming)
+            parts.append(f'<circle class="cal__next" cx="{px}" cy="{cy}" r="6">'
+                         f"<title>{esc(ticker)} · propera presentació estimada · "
+                         f"{fmt_date(upcoming)}</title></circle>")
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def watch_points(tickers: list[str], data: dict[str, Any]) -> str:
+    """Primer punt de l'apartat d'alertes de l'informe més recent de cada empresa."""
+    items = []
+    for ticker in tickers:
+        record = latest_record(data.get(ticker, {}))
+        if not record:
+            continue
+        _, chapters = parse_summary(record.get("summary") or "")
+        flags = next((c for c in chapters if c.kind == "flags"), None)
+        bullets = [re.sub(r"^[-•*]\s+", "", l.strip()) for l in (flags.lines if flags else [])
+                   if re.match(r"^[-•*]\s+", l)]
+        if not bullets:
+            continue
+        text = bullets[0].rstrip(":")
+        if len(text) < 30 and len(bullets) > 1:  # "Marges:" -> s'hi afegeix el primer detall.
+            text = f"{text}: {bullets[1][:1].lower()}{bullets[1][1:]}"
+        if len(text) > 220:
+            text = text[:220].rsplit(" ", 1)[0] + "…"
+        flagged = [u["token"] for u in record.get("unverified") or []]
+        items.append(
+            f'<li><a class="watch__ticker" href="{page_name(ticker)}#f-{record["form_type"]}">'
+            f'{esc(ticker)}</a><p>{inline(text, flagged)}</p>'
+            f'<span class="watch__src">{record["form_type"]} · {fmt_date_short(parse_date(record.get("filed")))}</span></li>'
         )
-    body = f'<div class="grid">{"".join(cards)}</div>'
-    return layout("FilingMind · Inici", tickers, None, body, generated)
+    if not items:
+        return ""
+    return ('<section class="block watch"><header class="block__head"><h2>Punts a vigilar</h2>'
+            '<p>El primer avís de l\'apartat d\'alertes de l\'informe més recent.</p></header>'
+            f'<ol class="watch__list">{"".join(items)}</ol></section>')
 
 
-def render_filing(form: str, record: dict[str, Any] | None) -> str:
-    """Bloc amb el resum d'un filing (o un avís si encara no n'hi ha)."""
+def render_index(tickers: list[str], data: dict[str, Any], today: date, generated: str) -> str:
+    """Pàgina d'inici: estat de la cartera, llibre, punts a vigilar i calendari."""
+    if not tickers:
+        body = ('<section class="intro"><p class="kicker">Estat de la cartera</p>'
+                '<h1>La cartera és buida</h1><p class="intro__lede">Afegeix tickers a '
+                '<code>portfolio.json</code> i apareixeran aquí a la propera execució.</p></section>')
+        return layout("FilingMind", tickers, None, body, today, generated)
+
+    rows, reports, figures = [], 0, 0
+    for ticker in tickers:
+        records = data.get(ticker, {})
+        name = company_name(ticker, [r for r in records.values() if r])
+        cells = []
+        for form in FORM_TYPES:
+            record = records.get(form)
+            if record:
+                reports += 1
+                figures += verification(record)[0]
+                day = parse_date(record.get("filed"))
+                cells.append(f'<td data-label="{form}"><span class="when">{fmt_date_short(day)}</span>'
+                             f'<span class="age">{fmt_age(day, today)}</span></td>')
+            else:
+                cells.append(f'<td data-label="{form}"><span class="when muted">—</span></td>')
+        latest = latest_record(records)
+        kpi_cell = '<span class="muted">—</span>'
+        if latest:
+            kpis = extract_kpis(parse_summary(latest.get("summary") or "")[1], limit=1)
+            if kpis:
+                kpi = kpis[0]
+                delta = (f'<span class="delta delta--{kpi.direction}">{esc(kpi.delta)}</span>'
+                         if kpi.delta else "")
+                kpi_cell = (f'<span class="kpi-mini__label">{esc(kpi.label)}</span>'
+                            f'<span class="kpi-mini__value">{esc(kpi.value)}{delta}</span>')
+        stamps = " ".join(f'<span class="stamp-pair"><small>{f[-1]}</small>{stamp(records.get(f))}</span>'
+                          for f in FORM_TYPES)
+        href = page_name(ticker)
+        name_html = f'<span class="ledger__name">{esc(name)}</span>' if name else ""
+        rows.append(
+            f'<tr data-href="{href}"><th scope="row"><a class="ledger__ticker" href="{href}">{esc(ticker)}</a>'
+            f"{name_html}</th>"
+            f'{"".join(cells)}<td data-label="Xifra destacada" class="kpi-mini">{kpi_cell}</td>'
+            f'<td data-label="Verificació" class="ledger__stamps">{stamps}</td></tr>'
+        )
+
+    companies = len(tickers)
+    stats = [
+        (companies, "empresa" if companies == 1 else "empreses"),
+        (reports, "informe resumit" if reports == 1 else "informes resumits"),
+        (figures, "xifra contrastada" if figures == 1 else "xifres contrastades"),
+    ]
+    stats_html = "".join(f'<li><span class="stat__n">{n}</span><span class="stat__l">{l}</span></li>'
+                         for n, l in stats)
+    body = f"""<section class="intro">
+  <p class="kicker">Estat de la cartera</p>
+  <h1>Què diuen els últims informes de cada empresa</h1>
+  <ul class="stats">{stats_html}</ul>
+</section>
+<section class="block">
+  <header class="block__head"><h2>Llibre de la cartera</h2>
+    <p>Últim informe anual (10-K) i trimestral (10-Q) de cada empresa.</p></header>
+  <div class="ledger-wrap"><table class="ledger">
+    <thead><tr><th scope="col">Empresa</th><th scope="col">Últim 10-K</th><th scope="col">Últim 10-Q</th>
+    <th scope="col">Xifra destacada</th><th scope="col">Verificació</th></tr></thead>
+    <tbody>{"".join(rows)}</tbody>
+  </table></div>
+</section>
+{watch_points(tickers, data)}
+<section class="block">
+  <header class="block__head"><h2>Calendari de presentacions</h2>
+    <p>Dates de presentació a la SEC dels últims dotze mesos i la propera estimada.</p></header>
+  <div class="cal-wrap">{timeline_svg(tickers, data, today)}</div>
+  <ul class="legend">
+    <li><span class="legend__k"></span>10-K</li><li><span class="legend__q"></span>10-Q</li>
+    <li><span class="legend__next"></span>Propera estimada (un trimestre després de l'última)</li>
+  </ul>
+</section>"""
+    return layout("FilingMind · Cartera", tickers, None, body, today, generated)
+
+
+# --------------------------------------------------------------------------- #
+# Pàgina d'empresa
+# --------------------------------------------------------------------------- #
+def render_filing(ticker: str, form: str, record: dict[str, Any] | None, today: date,
+                  is_default: bool) -> str:
+    """Un filing: capçalera, xifres destacades, segell, índex i apartats."""
+    anchor = f"f-{form}"
+    default = " data-default" if is_default else ""
     if not record:
-        return (
-            f'<section class="filing"><h2>{FORM_LABELS[form]}</h2>'
-            '<p class="empty">Encara no hi ha cap resum. Es generarà a la propera execució.</p>'
-            "</section>"
-        )
+        return (f'<article class="filing filing--empty" id="{anchor}"{default}>'
+                f'<p class="kicker">{FORM_LABELS[form]} · {form}</p>'
+                '<p class="empty">Encara no hi ha cap resum. Es generarà a la propera execució.</p>'
+                "</article>")
 
-    alert = ""
     unverified = record.get("unverified") or []
+    flagged = [u["token"] for u in unverified]
+    lede, chapters = parse_summary(record.get("summary") or "")
+    dek, notes = lede_parts(ticker, lede)
+    day = parse_date(record.get("filed"))
+    url = esc(record.get("url", ""))
+
+    kpis = extract_kpis(chapters)
+    kpi_html = ""
+    if kpis:
+        items = []
+        for kpi in kpis:
+            delta = (f'<span class="delta delta--{kpi.direction}">{esc(kpi.delta)}</span>'
+                     if kpi.delta else "")
+            items.append(f'<div class="kpi"><dt>{esc(kpi.label)}</dt>'
+                         f'<dd><span class="kpi__value">{esc(kpi.value)}</span>{delta}</dd></div>')
+        kpi_html = f'<dl class="kpis">{"".join(items)}</dl>'
+
+    total, flagged_count = verification(record)
+    if flagged_count:
+        seal = (f'<div class="seal seal--flag"><span class="seal__big">{flagged_count}</span>'
+                f'<span class="seal__text">de {total} xifres no s\'han trobat al document</span></div>')
+    else:
+        seal = (f'<div class="seal"><span class="seal__big">{total}/{total}</span>'
+                '<span class="seal__text">xifres contrastades amb el document</span></div>')
+
+    audit = ""
     if unverified:
-        items = "".join(
-            f"<li><strong>{html.escape(u['token'])}</strong>: …{html.escape(u['context'])}…</li>"
-            for u in unverified
+        items = "".join(f"<li><strong>{esc(u['token'])}</strong><span>…{esc(u['context'])}…</span></li>"
+                        for u in unverified)
+        audit = ('<aside class="audit"><h3>Nota d\'auditoria</h3>'
+                 "<p>Aquestes xifres no s'han trobat al document original. Revisa-les abans de fer-les servir.</p>"
+                 f"<ul>{items}</ul></aside>")
+
+    toc = "".join(f'<li><a href="#{anchor}-c{i}"><span>{i:02d}</span>{esc(c.label)}</a></li>'
+                  for i, c in enumerate(chapters, 1))
+    sections = []
+    for i, chapter in enumerate(chapters, 1):
+        sections.append(
+            f'<section class="chapter chapter--{chapter.kind}" id="{anchor}-c{i}">'
+            f'<h3><span class="chapter__n">{i:02d}</span>{esc(chapter.title)}</h3>'
+            f"{render_lines(chapter.lines, flagged)}</section>"
         )
-        alert = (
-            '<div class="alert"><strong>⚠️ Xifres no verificades.</strong> '
-            f"No s'han trobat al document; revisa-les abans de fer-les servir.<ul>{items}</ul></div>"
-        )
+    notes_html = render_lines(notes, flagged)
 
-    url = html.escape(record.get("url", ""), quote=True)
-    return (
-        f'<section class="filing"><h2>{FORM_LABELS[form]}</h2>'
-        f'<div class="meta">Presentat el {html.escape(record.get("filed", "—"))} · '
-        f'<a href="{url}" target="_blank" rel="noopener">Document a la SEC</a> · '
-        f"{status_badge(record)}</div>"
-        f'{alert}<div class="summary">{render_summary(record.get("summary", ""))}</div>'
-        "</section>"
-    )
+    return f"""<article class="filing" id="{anchor}"{default} aria-label="{form}">
+  <header class="filing__head">
+    <p class="kicker">{FORM_LABELS[form]} · {form}</p>
+    <h2 class="filing__dek">{inline(dek) if dek else form}</h2>
+    <p class="filing__meta">Presentat el {fmt_date(day)} <span class="dot">·</span> {fmt_age(day, today)}
+      <span class="dot">·</span> <a href="{url}" target="_blank" rel="noopener">Document original a EDGAR&nbsp;↗</a></p>
+  </header>
+  {kpi_html}
+  <div class="filing__body">
+    <div class="rail">
+      {seal}
+      <nav class="toc" aria-label="Apartats del {form}"><ol>{toc}</ol></nav>
+      {audit}
+    </div>
+    <div class="prose">{notes_html}{"".join(sections)}</div>
+  </div>
+</article>"""
 
 
-def render_company(ticker: str, tickers: list[str], data: dict[str, Any], generated: str) -> str:
-    """Pàgina d'una empresa amb el 10-K i el 10-Q."""
+def render_company(ticker: str, tickers: list[str], data: dict[str, Any], today: date,
+                   generated: str) -> str:
+    """Pàgina d'una empresa amb el 10-K i el 10-Q (per defecte, el més recent)."""
     records = data.get(ticker, {})
-    sections = "".join(render_filing(form, records.get(form)) for form in FORM_TYPES)
-    body = f'<h2 style="margin-top:0">{html.escape(ticker)}</h2><div class="filings">{sections}</div>'
-    return layout(f"FilingMind · {ticker}", tickers, ticker, body, generated)
+    name = company_name(ticker, [r for r in records.values() if r])
+    latest = latest_record(records)
+    default_form = latest["form_type"] if latest and latest.get("form_type") in FORM_TYPES else "10-K"
+
+    switch = "".join(
+        f'<button type="button" role="tab" data-target="f-{form}" '
+        f'aria-selected="{"true" if form == default_form else "false"}">'
+        f'<span class="switch__form">{form}</span>'
+        f'<span class="switch__date">{fmt_date_short(parse_date(records[form].get("filed"))) if records.get(form) else "pendent"}</span>'
+        "</button>"
+        for form in FORM_TYPES
+    )
+    filings = "".join(render_filing(ticker, form, records.get(form), today, form == default_form)
+                      for form in FORM_TYPES)
+
+    index = tickers.index(ticker)
+    prev_t, next_t = tickers[index - 1], tickers[(index + 1) % len(tickers)]
+    pager = ""
+    if len(tickers) > 1:
+        pager = (f'<nav class="pager" aria-label="Altres empreses">'
+                 f'<a href="{page_name(prev_t)}" rel="prev"><small>Anterior</small>{esc(prev_t)}</a>'
+                 f'<a href="{page_name(next_t)}" rel="next"><small>Següent</small>{esc(next_t)}</a></nav>')
+
+    if not latest:
+        body = (f'<section class="hero"><p class="kicker"><a href="index.html">Cartera</a> / {esc(ticker)}</p>'
+                f'<h1 class="hero__ticker">{esc(ticker)}</h1></section>'
+                '<p class="empty">Encara no hi ha cap resum per a aquesta empresa. '
+                "Es generarà a la propera execució.</p>" + pager)
+        return layout(f"{ticker} · FilingMind", tickers, ticker, body, today, generated)
+
+    body = f"""<section class="hero">
+  <p class="kicker"><a href="index.html">Cartera</a> / {esc(ticker)}</p>
+  <h1 class="hero__ticker">{esc(ticker)}</h1>
+  {f'<p class="hero__name">{esc(name)}</p>' if name else ""}
+  <div class="switch" role="tablist" aria-label="Informe">{switch}</div>
+</section>
+{filings}
+{pager}"""
+    title = f"{ticker} · {name} · FilingMind" if name else f"{ticker} · FilingMind"
+    return layout(title, tickers, ticker, body, today, generated)
 
 
-def build(output: Path = DEFAULT_OUTPUT) -> list[Path]:
+# --------------------------------------------------------------------------- #
+# Generació
+# --------------------------------------------------------------------------- #
+def build(output: Path = DEFAULT_OUTPUT, now: datetime | None = None) -> list[Path]:
     """Genera totes les pàgines a `output` i en retorna les rutes."""
-    tickers = [t.strip().upper() for t in load_json(PORTFOLIO_FILE, []) if t.strip()]
+    tickers: list[str] = []
+    for raw in load_json(PORTFOLIO_FILE, []):
+        ticker = str(raw).strip().upper()
+        if ticker and ticker not in tickers:
+            tickers.append(ticker)
     data = load_json(DATA_FILE, {})
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = now or datetime.now(timezone.utc)
+    today = now.date()
+    generated = f"{fmt_date(today)} a les {now:%H:%M} UTC"
 
     # Es buida el directori perquè no quedin pàgines d'empreses que ja no hi són.
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True)
+    shutil.copytree(ASSETS_DIR, output / "assets")
 
-    pages = {output / "index.html": render_index(tickers, data, generated)}
+    pages = {output / "index.html": render_index(tickers, data, today, generated)}
     for ticker in tickers:
-        pages[output / page_name(ticker)] = render_company(ticker, tickers, data, generated)
+        pages[output / page_name(ticker)] = render_company(ticker, tickers, data, today, generated)
     for path, content in pages.items():
         path.write_text(content, encoding="utf-8")
     return list(pages)
