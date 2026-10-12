@@ -24,6 +24,26 @@ El workflow executa els tests (`pytest tests`) abans de processar els filings.
 
 Si un filing falla (xarxa, API, Telegram), no es marca com a processat i es torna a intentar a la següent execució.
 
+## Dashboard web
+
+Cada execució genera també un petit web estàtic amb `build_site.py`:
+
+- **Inici:** una targeta per empresa amb la data de l'últim 10-K i 10-Q i l'estat de la verificació de xifres.
+- **Una pàgina per empresa:** el resum complet del 10-K i del 10-Q, amb un enllaç al document de la SEC i un avís si hi ha xifres per revisar.
+
+Les pestanyes i les pàgines surten de `portfolio.json`. Si hi afegeixes un ticker, el workflow s'executa automàticament: resumeix els seus filings, els envia per Telegram i afegeix la pàgina. Si en treus un, la seva pàgina desapareix.
+
+Els resums es desen a `data/filings.json`. Els filings que ja s'havien enviat abans que existís el dashboard es resumeixen una vegada per omplir-lo, però no es tornen a enviar per Telegram.
+
+### Veure el dashboard
+
+- **Sense configurar res:** a cada execució, a la pestanya **Actions**, obre l'execució i descarrega l'artefacte **dashboard**. És un zip: descomprimeix-lo i obre `index.html`.
+- **Com a web amb URL fixa (GitHub Pages):**
+  1. Cal que el repo sigui públic, o tenir GitHub Pro si és privat. En tots dos casos, la pàgina publicada és pública.
+  2. Ves a **Settings → Pages** i, a *Source*, tria **GitHub Actions**.
+  3. Ves a **Settings → Secrets and variables → Actions → Variables** i crea `PUBLISH_PAGES` amb el valor `true`.
+  4. A partir de la propera execució, el dashboard es publica a `https://<usuari>.github.io/filingmind/`.
+
 ## Configuració
 
 ### 1. Crear el bot de Telegram
@@ -48,6 +68,7 @@ Opcional, a la pestanya **Variables** (no secrets):
 | Variable | Descripció |
 |---|---|
 | `ANTHROPIC_MODEL` | Model de Claude. Per defecte `claude-sonnet-5-5`. |
+| `PUBLISH_PAGES` | `true` per publicar el dashboard a GitHub Pages (vegeu més amunt). |
 | `ANTHROPIC_WORKSPACE_ID` | Només si la clau de l'API no està associada a cap workspace (error 400 "not scoped to a workspace"). És l'ID del workspace (`wrkspc_...`) que surt a la consola d'Anthropic. |
 
 ### 3. Permisos del workflow

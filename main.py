@@ -28,6 +28,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -46,6 +47,7 @@ from verify_numbers import UnverifiedNumber, find_unverified_numbers
 BASE_DIR = Path(__file__).resolve().parent
 PORTFOLIO_FILE = BASE_DIR / "portfolio.json"
 STATE_FILE = BASE_DIR / "processed_filings.json"
+DATA_FILE = BASE_DIR / "data" / "filings.json"
 
 SEC_FEED_URL = (
     "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
@@ -150,11 +152,23 @@ def load_state() -> dict[str, list[str]]:
     return data
 
 
+def write_json(path: Path, data: Any) -> None:
+    """Desa un JSON de forma atòmica per evitar fitxers corruptes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 def save_state(state: dict[str, list[str]]) -> None:
-    """Desa l'estat de forma atòmica per evitar fitxers corruptes."""
-    tmp = STATE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    """Desa la llista de filings processats."""
+    write_json(STATE_FILE, state)
+
+
+def load_filings_data() -> dict[str, dict[str, dict[str, Any]]]:
+    """Llegeix els últims resums desats per empresa i tipus de filing (per al dashboard)."""
+    data = load_json(DATA_FILE, {})
+    return data if isinstance(data, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -435,16 +449,16 @@ def format_unverified(unverified: list[UnverifiedNumber]) -> str:
 
 
 def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, str],
-                     text: str) -> str | None:
+                     text: str) -> tuple[str, list[UnverifiedNumber]] | None:
     """Genera el resum executiu d'un filing i n'audita les xifres.
 
     1. Claude genera el resum.
     2. Es comprova que cada xifra del resum aparegui al document.
     3. Si n'hi ha alguna que no hi surt, es demana a Claude que corregeixi el
        resum (una sola vegada) i es torna a comprovar.
-    4. Si encara en queden, el resum s'envia amb un avís que les llista.
+    4. Si encara en queden, es retornen perquè el missatge les pugui llistar.
 
-    Retorna None si la crida a l'API falla.
+    Retorna (resum, xifres no verificades), o None si la crida a l'API falla.
     """
     header = (
         f"Empresa: {filing['ticker']}\n"
@@ -473,7 +487,7 @@ def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, 
     unverified = find_unverified_numbers(summary, text)
     if not unverified:
         log.info("Verificació de xifres: totes les xifres apareixen al document")
-        return summary
+        return summary, []
 
     log.warning("Verificació de xifres: %d xifres no apareixen al document; es demana correcció:\n%s",
                 len(unverified), format_unverified(unverified))
@@ -489,11 +503,16 @@ def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, 
 
     if not unverified:
         log.info("Verificació de xifres: el resum corregit ja no té xifres sense verificar")
-        return summary
+        return summary, []
 
     log.warning("Verificació de xifres: queden %d xifres sense verificar", len(unverified))
+    return summary, unverified
+
+
+def unverified_warning(unverified: list[UnverifiedNumber]) -> str:
+    """Avís que s'afegeix al missatge quan queden xifres sense verificar."""
     return (
-        f"{summary}\n\n⚠️ Xifres no verificades: no s'han trobat al document, "
+        "⚠️ Xifres no verificades: no s'han trobat al document, "
         f"revisa-les abans de fer-les servir:\n{format_unverified(unverified)}"
     )
 
@@ -553,37 +572,59 @@ def send_telegram(token: str, chat_id: str, text: str) -> bool:
 
 def process_filing(filing: dict[str, str], session: requests.Session,
                    client: anthropic.Anthropic, model: str,
-                   telegram_token: str, telegram_chat_id: str) -> bool:
-    """Descarrega, resumeix i notifica un filing. Retorna True si s'ha completat."""
-    log.info("Nou filing: %s %s (%s)", filing["ticker"], filing["form_type"], filing["updated"])
+                   telegram_token: str, telegram_chat_id: str,
+                   notify: bool = True) -> dict[str, Any] | None:
+    """Descarrega i resumeix un filing i, si `notify`, l'envia per Telegram.
+
+    Retorna el registre que es desa per al dashboard, o None si alguna cosa falla.
+    """
+    log.info("%s: %s %s (%s)", "Nou filing" if notify else "Generant resum per al dashboard",
+             filing["ticker"], filing["form_type"], filing["updated"])
 
     doc_url = find_primary_document(session, filing["index_url"], filing["form_type"])
     if not doc_url:
         log.error("No s'ha trobat el document principal de %s", filing["index_url"])
-        return False
+        return None
 
     response = sec_get(session, doc_url)
     if response is None:
-        return False
+        return None
 
     try:
         text = clean_sec_html(response.content, filing["form_type"])
     except Exception as exc:
         log.error("Error netejant l'HTML de %s: %s", doc_url, exc)
-        return False
+        return None
     if not text:
         log.error("El document %s no conté text", doc_url)
-        return False
+        return None
 
-    summary = summarize_filing(client, model, filing, text)
-    if not summary:
-        return False
+    result = summarize_filing(client, model, filing, text)
+    if result is None:
+        return None
+    summary, unverified = result
 
-    header = (
-        f"📄 {filing['ticker']} · {filing['form_type']} · {filing['updated'][:10]}\n"
-        f"{doc_url}\n\n"
-    )
-    return send_telegram(telegram_token, telegram_chat_id, header + summary)
+    if notify:
+        message = (
+            f"📄 {filing['ticker']} · {filing['form_type']} · {filing['updated'][:10]}\n"
+            f"{doc_url}\n\n{summary}"
+        )
+        if unverified:
+            message += "\n\n" + unverified_warning(unverified)
+        if not send_telegram(telegram_token, telegram_chat_id, message):
+            return None
+
+    return {
+        "id": filing["id"],
+        "form_type": filing["form_type"],
+        "title": filing["title"],
+        "filed": filing["updated"][:10],
+        "url": doc_url,
+        "summary": summary,
+        "unverified": [{"token": u.token, "context": u.context} for u in unverified],
+        "model": model,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 def main() -> int:
@@ -597,6 +638,7 @@ def main() -> int:
         max_entries = int(os.environ.get("MAX_ENTRIES_PER_FEED", "1"))
         tickers = load_portfolio()
         state = load_state()
+        filings_data = load_filings_data()
     except (ConfigError, ValueError) as exc:
         log.error("Configuració invàlida: %s", exc)
         return 1
@@ -614,16 +656,25 @@ def main() -> int:
     for ticker in tickers:
         for form_type in FORM_TYPES:
             for filing in fetch_filings(session, ticker, form_type, max_entries):
-                if filing["id"] in processed:
+                already_sent = filing["id"] in processed
+                stored = filings_data.get(ticker, {}).get(form_type, {}).get("id") == filing["id"]
+                if already_sent and stored:
                     continue
-                new_count += 1
-                if process_filing(filing, session, client, model,
-                                  telegram_token, telegram_chat_id):
+                # Un filing ja enviat però sense resum desat (p. ex. d'abans que
+                # existís el dashboard) es resumeix sense tornar-lo a enviar.
+                new_count += not already_sent
+                record = process_filing(filing, session, client, model,
+                                        telegram_token, telegram_chat_id,
+                                        notify=not already_sent)
+                if record is None:
+                    errors += 1
+                    continue
+                filings_data.setdefault(ticker, {})[form_type] = record
+                write_json(DATA_FILE, filings_data)
+                if not already_sent:
                     processed.add(filing["id"])
                     state["processed"].append(filing["id"])
                     save_state(state)  # Es desa després de cada èxit.
-                else:
-                    errors += 1
 
     save_state(state)
     log.info("Fet: %d filings nous, %d amb errors", new_count, errors)

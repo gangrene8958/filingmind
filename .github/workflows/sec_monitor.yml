@@ -5,8 +5,13 @@ on:
     # De dilluns a divendres a les 22:00 UTC
     - cron: "0 22 * * 1-5"
   workflow_dispatch:
+  # Quan es modifica la cartera, es processen les empreses noves i el
+  # dashboard s'actualitza amb les pestanyes i pàgines corresponents.
+  push:
+    branches: [main]
+    paths: [portfolio.json]
 
-# Cal permís d'escriptura per fer commit de processed_filings.json
+# Cal permís d'escriptura per fer commit de l'estat i dels resums
 permissions:
   contents: write
 
@@ -55,11 +60,67 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add processed_filings.json
+          git add processed_filings.json data/
           if git diff --cached --quiet; then
-            echo "Cap canvi a processed_filings.json"
+            echo "Cap canvi a l'estat ni als resums"
           else
-            git commit -m "chore: actualitzar processed_filings.json [skip ci]"
+            git commit -m "chore: actualitzar estat i resums [skip ci]"
             git pull --rebase origin "${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
+
+  # Genera el dashboard web a partir de portfolio.json i data/filings.json.
+  # S'executa encara que l'auditoria hagi fallat, per mostrar sempre la cartera
+  # actual amb els últims resums disponibles. El resultat es pot descarregar com
+  # a artefacte "dashboard" des de la pàgina de l'execució.
+  dashboard:
+    needs: monitor
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout del repositori (amb els resums acabats de desar)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generar el dashboard
+        run: python build_site.py site
+
+      - name: Desar el dashboard com a artefacte descarregable
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard
+          path: site
+
+      - name: Preparar el dashboard per a GitHub Pages
+        if: vars.PUBLISH_PAGES == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Publica el dashboard a GitHub Pages. Només s'executa si la variable de
+  # repositori PUBLISH_PAGES val "true" (cal tenir GitHub Pages activat amb la
+  # font "GitHub Actions").
+  pages:
+    needs: dashboard
+    if: always() && needs.dashboard.result == 'success' && vars.PUBLISH_PAGES == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Publicar a GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

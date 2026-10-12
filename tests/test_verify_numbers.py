@@ -121,7 +121,7 @@ def run_summarize(responses):
 
 def test_clean_summary_needs_one_call():
     result, stream = run_summarize(["Vendes de $391,035 milions."])
-    assert result == "Vendes de $391,035 milions."
+    assert result == ("Vendes de $391,035 milions.", [])
     assert stream.call_count == 1
 
 
@@ -130,7 +130,7 @@ def test_invented_number_triggers_correction():
         "Vendes de $391,035 milions i benefici de $93,736 milions.",
         "Vendes de $391,035 milions.",
     ])
-    assert result == "Vendes de $391,035 milions."
+    assert result == ("Vendes de $391,035 milions.", [])
     assert stream.call_count == 2
     correction_request = stream.call_args_list[1].kwargs["messages"][-1]["content"]
     assert "93,736" in correction_request
@@ -142,9 +142,11 @@ def test_uncorrected_number_is_flagged_in_message():
         "Benefici de $93,736 milions.",
     ])
     assert stream.call_count == 2
-    assert result.startswith("Benefici de $93,736 milions.")
-    assert "⚠️ Xifres no verificades" in result
-    assert "93,736" in result.split("⚠️")[1]
+    summary, unverified = result
+    assert summary == "Benefici de $93,736 milions."
+    assert tokens(unverified) == ["93,736"]
+    warning = main.unverified_warning(unverified)
+    assert "⚠️ Xifres no verificades" in warning and "93,736" in warning
 
 
 def test_document_is_cached_for_correction():
