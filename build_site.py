@@ -122,22 +122,31 @@ def render_summary(summary: str) -> str:
     """Converteix el resum en text pla a HTML.
 
     Les línies numerades ("1. Evolució del negoci...") passen a títols, les que
-    comencen amb guió a llistes i la resta a paràgrafs.
+    comencen amb guió a llistes (les sagnades, a subllistes) i la resta a paràgrafs.
     """
     parts: list[str] = []
-    in_list = False
+    depth = 0  # Nivells de llista oberts.
+
+    def close_lists(level: int) -> None:
+        nonlocal depth
+        while depth > level:
+            parts.append("</li></ul>")
+            depth -= 1
+
     for raw in summary.splitlines():
         line = raw.strip()
         bullet = re.match(r"^[-•*]\s+(.*)", line)
         if bullet:
-            if not in_list:
+            level = 2 if len(raw) - len(raw.lstrip()) >= 2 and depth >= 1 else 1
+            if level > depth:
                 parts.append("<ul>")
-                in_list = True
-            parts.append(f"<li>{inline(bullet.group(1))}</li>")
+                depth = level
+            else:
+                close_lists(level)
+                parts.append("</li>")
+            parts.append(f"<li>{inline(bullet.group(1))}")
             continue
-        if in_list:
-            parts.append("</ul>")
-            in_list = False
+        close_lists(0)
         if not line:
             continue
         heading = re.match(r"^(?:#+\s*)?(\d+\.\s+.+)$", line)
@@ -145,8 +154,7 @@ def render_summary(summary: str) -> str:
             parts.append(f"<h3>{inline(heading.group(1).rstrip(':'))}</h3>")
         else:
             parts.append(f"<p>{inline(line)}</p>")
-    if in_list:
-        parts.append("</ul>")
+    close_lists(0)
     return "\n".join(parts)
 
 

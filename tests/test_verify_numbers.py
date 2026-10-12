@@ -154,3 +154,20 @@ def test_document_is_cached_for_correction():
     first_block = stream.call_args.kwargs["messages"][0]["content"][0]
     assert first_block["cache_control"] == {"type": "ephemeral"}
     assert "<document>" in first_block["text"]
+
+
+# --- Extracció de seccions ---------------------------------------------------
+
+def test_cross_reference_is_not_taken_as_section():
+    risk = "Real risk factor text. " * 40
+    mdna = "Revenue grew. " * 60
+    text = (
+        "Table of Contents\nItem 1A. Risk Factors 10\nItem 1B. Unresolved 20\n"
+        f"Item 1A. Risk Factors\n{risk}\nItem 1B. Unresolved Staff Comments\nNone.\n"
+        "Item 7. Management's Discussion and Analysis\n"
+        f"{mdna} For more, see Item 1A. Risk Factors of this report. {mdna}\n"
+        "Item 7A. Quantitative and Qualitative Disclosures\n"
+    )
+    section = main.extract_section(text, *main.ITEM_PATTERNS["10-K"][0][1:])
+    assert section.startswith("Item 1A. Risk Factors\nReal risk factor text.")
+    assert "Revenue grew" not in section

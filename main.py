@@ -343,20 +343,35 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+def _find_section(text: str, start_pattern: str, end_pattern: str) -> str:
+    """Secció més llarga entre una coincidència d'inici i la següent de final."""
+    flags = re.IGNORECASE | re.DOTALL
+    best = ""
+    for start in re.finditer(start_pattern, text, flags):
+        end = re.search(end_pattern, text[start.end():], flags)
+        if not end:
+            # Sense final, la "secció" arribaria fins al final del document:
+            # gairebé segur que és una referència creuada dins d'una altra secció.
+            continue
+        candidate = text[start.start():start.end() + end.start()].strip()
+        if len(candidate) > len(best):
+            best = candidate
+    return best
+
+
 def extract_section(text: str, start_pattern: str, end_pattern: str) -> str:
     """Extreu una secció entre dos patrons.
 
     Com que l'índex del document també conté els títols dels items, es
     proven totes les coincidències d'inici i es queda la secció més llarga.
+    Primer es busquen només títols a principi de línia, per no confondre'ls amb
+    referències dins del text ("see Item 1A. Risk Factors"); si no se'n troba
+    cap, es busca a qualsevol lloc.
     """
-    flags = re.IGNORECASE | re.DOTALL
-    best = ""
-    for start in re.finditer(start_pattern, text, flags):
-        end = re.search(end_pattern, text[start.end():], flags)
-        stop = start.end() + end.start() if end else len(text)
-        candidate = text[start.start():stop].strip()
-        if len(candidate) > len(best):
-            best = candidate
+    line_start = r"(?:^|(?<=\n))[ \t]*"
+    best = _find_section(text, line_start + f"(?:{start_pattern})", line_start + f"(?:{end_pattern})")
+    if len(best) < 500:
+        best = _find_section(text, start_pattern, end_pattern)
     # Una "secció" de menys de 500 caràcters és gairebé segur una entrada de l'índex.
     return best if len(best) >= 500 else ""
 

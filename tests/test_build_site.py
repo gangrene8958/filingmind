@@ -57,7 +57,7 @@ def test_company_page_shows_both_filings(tmp_path, monkeypatch):
     page = (out / "aapl.html").read_text()
     assert '<a href="aapl.html" class="active">AAPL</a>' in page
     assert "<h3>1. Evolució del negoci</h3>" in page
-    assert "<li>Vendes de $391,035 milions</li>" in page
+    assert "<li>Vendes de $391,035 milions" in page
     assert "<strong>46.2%</strong>" in page
     assert "<script>alert" not in page  # El text del resum s'escapa.
     assert "Xifres verificades" in page
@@ -69,3 +69,9 @@ def test_company_without_data_is_pending(tmp_path, monkeypatch):
     out = build_with(tmp_path, monkeypatch, ["NVDA"], {})
     assert "Pendent" in (out / "index.html").read_text()
     assert "Encara no hi ha cap resum" in (out / "nvda.html").read_text()
+
+
+def test_nested_bullets_become_sublists():
+    rendered = build_site.render_summary("- Segments:\n  - Compute\n  - Graphics\n- Total")
+    assert rendered.count("<ul>") == 2
+    assert rendered.index("Compute") > rendered.index("<ul>", rendered.index("Segments"))
