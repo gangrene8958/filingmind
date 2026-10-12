@@ -41,8 +41,7 @@ Els resums es desen a `data/filings.json`. Els filings que ja s'havien enviat ab
 - **Com a web amb URL fixa (GitHub Pages):**
   1. Cal que el repo sigui públic, o tenir GitHub Pro si és privat. En tots dos casos, la pàgina publicada és pública.
   2. Ves a **Settings → Pages** i, a *Source*, tria **GitHub Actions**.
-  3. Ves a **Settings → Secrets and variables → Actions → Variables** i crea `PUBLISH_PAGES` amb el valor `true`.
-  4. A partir de la propera execució, el dashboard es publica a `https://<usuari>.github.io/filingmind/`.
+  3. A partir de la propera execució, el dashboard es publica a `https://<usuari>.github.io/filingmind/`.
 
 ## Configuració
 
@@ -68,7 +67,7 @@ Opcional, a la pestanya **Variables** (no secrets):
 | Variable | Descripció |
 |---|---|
 | `ANTHROPIC_MODEL` | Model de Claude. Per defecte `claude-sonnet-5-5`. |
-| `PUBLISH_PAGES` | `true` per publicar el dashboard a GitHub Pages (vegeu més amunt). |
+| `PUBLISH_PAGES` | `false` per no publicar el dashboard a GitHub Pages (per defecte es publica). |
 | `ANTHROPIC_WORKSPACE_ID` | Només si la clau de l'API no està associada a cap workspace (error 400 "not scoped to a workspace"). És l'ID del workspace (`wrkspc_...`) que surt a la consola d'Anthropic. |
 
 ### 3. Permisos del workflow

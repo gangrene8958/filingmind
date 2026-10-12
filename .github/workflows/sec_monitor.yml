@@ -101,17 +101,16 @@ jobs:
           path: site
 
       - name: Preparar el dashboard per a GitHub Pages
-        if: vars.PUBLISH_PAGES == 'true'
+        if: vars.PUBLISH_PAGES != 'false'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
-  # Publica el dashboard a GitHub Pages. Només s'executa si la variable de
-  # repositori PUBLISH_PAGES val "true" (cal tenir GitHub Pages activat amb la
-  # font "GitHub Actions").
+  # Publica el dashboard a GitHub Pages (cal tenir Pages activat amb la font
+  # "GitHub Actions"). Per desactivar-ho, crea la variable PUBLISH_PAGES=false.
   pages:
     needs: dashboard
-    if: always() && needs.dashboard.result == 'success' && vars.PUBLISH_PAGES == 'true'
+    if: always() && needs.dashboard.result == 'success' && vars.PUBLISH_PAGES != 'false'
     runs-on: ubuntu-latest
     permissions:
       pages: write
