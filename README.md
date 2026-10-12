@@ -31,7 +31,7 @@ Cada execució genera també un petit web estàtic amb `build_site.py`:
 - **Cartera:** un llibre amb l'últim 10-K i 10-Q de cada empresa, una xifra destacada i l'estat de la verificació; els punts a vigilar de l'informe més recent; i un calendari de presentacions amb la propera estimada.
 - **Una pàgina per empresa:** el 10-K i el 10-Q (amb un selector), les xifres destacades, el segell de verificació, un índex per apartats i l'enllaç al document a EDGAR. Les xifres no trobades al document surten marcades en vermell.
 
-El disseny és a `site_assets/` (`style.css` i `app.js`) i es copia a cada generació. Les pàgines funcionen també sense JavaScript.
+El web i els resums són en anglès. El disseny és a `site_assets/` (`style.css` i `app.js`) i es copia a cada generació: té mode clar/fosc (segueix el sistema o el botó de la capçalera), transicions entre pàgines i animacions suaus que es desactiven si el sistema demana menys moviment. Les pàgines funcionen també sense JavaScript.
 
 Les pestanyes i les pàgines surten de `portfolio.json`. Si hi afegeixes un ticker, el workflow s'executa automàticament: resumeix els seus filings, els envia per Telegram i afegeix la pàgina. Si en treus un, la seva pàgina desapareix.
 

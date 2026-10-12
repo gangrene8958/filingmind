@@ -71,41 +71,47 @@ logging.basicConfig(
 )
 log = logging.getLogger("filingmind")
 
-SYSTEM_PROMPT = """Ets un analista financer sènior especialitzat en l'anàlisi de \
-documents reglamentaris de la SEC (10-K i 10-Q). Rebràs el text extret d'un \
-filing, principalment les seccions de Risk Factors i Management's Discussion \
-and Analysis (MD&A).
+SYSTEM_PROMPT = """You are a senior financial analyst who specializes in SEC \
+regulatory filings (10-K and 10-Q). You will receive the text extracted from a \
+filing, mainly the Risk Factors and Management's Discussion and Analysis (MD&A) \
+sections.
 
-Redacta un resum executiu en català, concís i basat exclusivament en el \
-document, amb aquesta estructura:
+Write a concise executive summary in English, based only on the document. \
+Start with one line in this form:
 
-1. Evolució del negoci i dels ingressos: xifres clau, creixement i segments.
-2. Tres riscos principals: els més rellevants o nous respecte a períodes anteriors.
-3. Canvis estratègics: adquisicions, reestructuracions, nous productes o mercats.
-4. Alertes financeres (red flags): deteriorament de marges, liquiditat, deute, \
-litigis, canvis comptables, advertències de going concern o qualsevol altre senyal \
-preocupant. Si no n'hi ha cap de rellevant, digues-ho explícitament.
+EXECUTIVE SUMMARY – Company name (TICKER), form and period covered
 
-Fes servir text pla amb guions per a les llistes (sense taules ni Markdown \
-complex), perquè el resum es llegirà a Telegram.
+Then use exactly these four sections:
 
-Regles per a les xifres (es verificaran automàticament contra el document):
-- Fes servir només xifres que apareguin literalment al document.
-- Copia-les amb la notació del document (anglesa: 391,035 o 12.5%), indicant \
-la unitat ($ milions, %, etc.). Pots arrodonir, però no canviar el valor.
-- No calculis xifres noves (creixements, diferències, ràtios) si el document \
-no les dona. Si cal, descriu la tendència amb paraules.
-- No inventis dades que no apareguin al document."""
+1. BUSINESS AND REVENUE PERFORMANCE: key figures, growth and segments. Write the \
+main metrics as "Label: $X million (+N%)" when the document gives the change.
+2. THREE KEY RISKS: the most relevant ones, or those new compared with earlier periods.
+3. STRATEGIC CHANGES: acquisitions, restructurings, new products or markets.
+4. FINANCIAL RED FLAGS: margin deterioration, liquidity, debt, litigation, \
+accounting changes, going-concern warnings or any other worrying signal. If there \
+is nothing relevant, say so explicitly.
 
-CORRECTION_PROMPT = """Una verificació automàtica no ha trobat aquestes xifres \
-del teu resum enlloc del document:
+Use plain text with hyphens for lists (no tables or complex Markdown), because \
+the summary will be read on Telegram.
+
+Rules for figures (they will be checked automatically against the document):
+- Only use figures that appear literally in the document.
+- Copy them in the document's notation (391,035 or 12.5%) and state the unit \
+($ million, %, etc.). You may round, but never change the value.
+- Do not calculate new figures (growth rates, differences, ratios) unless the \
+document gives them. If needed, describe the trend in words.
+- Do not invent data that is not in the document."""
+
+CORRECTION_PROMPT = """An automatic check could not find these figures from your \
+summary anywhere in the document:
 
 {numbers}
 
-Revisa-les contra el document. Si una xifra és correcta però l'has escrita amb \
-un altre format, escriu-la tal com apareix al document. Si l'has calculat o no \
-surt al document, elimina-la o substitueix-la per una xifra que hi aparegui. \
-Respon només amb el resum complet corregit, amb la mateixa estructura."""
+Check them against the document. If a figure is correct but written in a \
+different format, write it exactly as it appears in the document. If you \
+calculated it or it is not in the document, remove it or replace it with a \
+figure that does appear. Reply only with the full corrected summary, keeping \
+the same structure."""
 
 
 class ConfigError(Exception):
@@ -476,10 +482,10 @@ def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, 
     Retorna (resum, xifres no verificades), o None si la crida a l'API falla.
     """
     header = (
-        f"Empresa: {filing['ticker']}\n"
-        f"Tipus de filing: {filing['form_type']}\n"
-        f"Títol: {filing['title']}\n"
-        f"Data: {filing['updated']}\n\n"
+        f"Company: {filing['ticker']}\n"
+        f"Filing type: {filing['form_type']}\n"
+        f"Title: {filing['title']}\n"
+        f"Date: {filing['updated']}\n\n"
     )
     messages: list[dict[str, Any]] = [{
         "role": "user",
@@ -488,7 +494,7 @@ def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, 
             # la segona crida no torna a pagar tot el document a preu complet.
             {"type": "text", "text": f"<document>\n{text}\n</document>",
              "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": header + "Redacta el resum executiu d'aquest filing."},
+            {"type": "text", "text": header + "Write the executive summary of this filing."},
         ],
     }]
 
@@ -527,8 +533,8 @@ def summarize_filing(client: anthropic.Anthropic, model: str, filing: dict[str, 
 def unverified_warning(unverified: list[UnverifiedNumber]) -> str:
     """Avís que s'afegeix al missatge quan queden xifres sense verificar."""
     return (
-        "⚠️ Xifres no verificades: no s'han trobat al document, "
-        f"revisa-les abans de fer-les servir:\n{format_unverified(unverified)}"
+        "⚠️ Unverified figures: they were not found in the document, "
+        f"check them before using them:\n{format_unverified(unverified)}"
     )
 
 

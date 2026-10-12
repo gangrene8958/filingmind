@@ -146,7 +146,7 @@ def test_uncorrected_number_is_flagged_in_message():
     assert summary == "Benefici de $93,736 milions."
     assert tokens(unverified) == ["93,736"]
     warning = main.unverified_warning(unverified)
-    assert "⚠️ Xifres no verificades" in warning and "93,736" in warning
+    assert "⚠️ Unverified figures" in warning and "93,736" in warning
 
 
 def test_document_is_cached_for_correction():

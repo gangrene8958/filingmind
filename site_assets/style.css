@@ -17,11 +17,13 @@
   --sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --wrap: 1180px;
+  --ease: cubic-bezier(0.2, 0.7, 0.1, 1);
   color-scheme: light;
 }
 
+/* Tema fosc: segueix el sistema tret que s'hagi triat el clar, o es força amb el botó. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --paper: #141310;
     --paper-2: #1d1b16;
     --ink: #ece5d5;
@@ -36,6 +38,21 @@
     --fig-bg: rgba(236, 229, 213, 0.07);
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --paper: #141310;
+  --paper-2: #1d1b16;
+  --ink: #ece5d5;
+  --ink-2: #cfc7b5;
+  --muted: #9b937f;
+  --rule: #39352b;
+  --rule-strong: #ece5d5;
+  --accent: #ff6b43;
+  --accent-soft: #3a1d14;
+  --ok: #9cc79a;
+  --ok-soft: #1e2b1d;
+  --fig-bg: rgba(236, 229, 213, 0.07);
+  color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -91,6 +108,7 @@ a:focus-visible, button:focus-visible, tr:focus-visible {
   color: var(--ink-2);
 }
 .mast__tag { text-align: right; }
+.mast__side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .mast__logo {
   font: 600 clamp(34px, 5vw, 52px)/0.9 var(--serif);
   letter-spacing: -0.035em;
@@ -130,6 +148,8 @@ a:focus-visible, button:focus-visible, tr:focus-visible {
   .mast__top { grid-template-columns: 1fr; justify-items: start; gap: 4px; padding-top: 16px; }
   .mast__date { order: 2; }
   .mast__tag { display: none; }
+  .mast__top { position: relative; }
+  .mast__side { position: absolute; right: 16px; top: 18px; }
 }
 
 /* ---------- Inici ---------- */
@@ -580,3 +600,127 @@ mark.fig--flag {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; scroll-behavior: auto !important; }
 }
+
+
+/* ---------- Canvi de tema ---------- */
+.js .theme[hidden] { display: inline-flex; }
+.theme {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: 500 11px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+.theme:hover { border-color: var(--ink); background: var(--paper-2); }
+.theme svg { width: 18px; height: 18px; overflow: visible; }
+.theme__disc { fill: currentColor; transition: r 0.5s var(--ease); }
+.theme__rays {
+  stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none;
+  transform-origin: 12px 12px; transition: transform 0.6s var(--ease), opacity 0.3s;
+}
+.theme__bite { fill: var(--paper); opacity: 0; transform: translate(8px, -8px); transition: transform 0.5s var(--ease), opacity 0.3s, fill 0.3s; }
+/* En mode fosc la icona és una lluna; en clar, un sol. */
+:root[data-theme="dark"] .theme__disc { r: 8px; }
+:root[data-theme="dark"] .theme__rays { transform: rotate(90deg) scale(0.4); opacity: 0; }
+:root[data-theme="dark"] .theme__bite { transform: translate(0, 0); opacity: 1; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .theme__disc { r: 8px; }
+  :root:not([data-theme]) .theme__rays { transform: rotate(90deg) scale(0.4); opacity: 0; }
+  :root:not([data-theme]) .theme__bite { transform: translate(0, 0); opacity: 1; }
+}
+.theme-fade, .theme-fade * { transition: background-color 0.4s, color 0.4s, border-color 0.4s, fill 0.4s, stroke 0.4s !important; }
+
+/* Transició circular des del botó (navegadors amb View Transitions). */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+.theme-wipe::view-transition-new(root) {
+  animation: wipe 0.65s var(--ease);
+}
+@keyframes wipe {
+  from { clip-path: circle(0 at var(--wipe-x, 100%) var(--wipe-y, 0)); }
+  to { clip-path: circle(var(--wipe-r, 150vmax) at var(--wipe-x, 100%) var(--wipe-y, 0)); }
+}
+
+/* ---------- Transicions entre pàgines ---------- */
+@view-transition { navigation: auto; }
+::view-transition-group(*) { animation-duration: 0.45s; animation-timing-function: var(--ease); }
+@media not (prefers-reduced-motion: reduce) {
+  html:not(.theme-wipe)::view-transition-old(root) { animation: page-out 0.25s ease-in both; }
+  html:not(.theme-wipe)::view-transition-new(root) { animation: page-in 0.4s var(--ease) both; }
+}
+@keyframes page-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
+
+/* ---------- Barra de lectura ---------- */
+.progress {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: 0 50%;
+  transform: scaleX(var(--read, 0));
+}
+
+/* ---------- Aparicions ---------- */
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes stamp-in {
+  0% { opacity: 0; transform: scale(1.35) rotate(-4deg); }
+  60% { opacity: 1; transform: scale(0.97) rotate(0.5deg); }
+  100% { transform: none; }
+}
+@keyframes pop { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: none; } }
+@keyframes draw { from { stroke-dashoffset: 400; } to { stroke-dashoffset: 0; } }
+@keyframes tick { from { opacity: 0; transform: translateY(6px); } }
+
+@media not (prefers-reduced-motion: reduce) {
+  .js .reveal { opacity: 0; }
+  .js .reveal.is-in { animation: rise 0.7s var(--ease) both; animation-delay: var(--d, 0s); }
+
+  .js .hero__ticker { animation: rise 0.8s var(--ease) both; }
+  .js .hero__name { animation: rise 0.8s var(--ease) 0.08s both; }
+  .js .filing.is-shown .filing__head { animation: rise 0.6s var(--ease) both; }
+  .js .filing.is-shown .kpi { animation: rise 0.6s var(--ease) both; animation-delay: calc(0.1s + var(--i) * 0.07s); }
+  .js .filing.is-shown .seal { animation: stamp-in 0.55s cubic-bezier(0.3, 1.4, 0.5, 1) 0.45s both; }
+  .js .filing.is-shown .delta { animation: tick 0.4s var(--ease) both; animation-delay: calc(0.4s + var(--i, 0) * 0.07s); }
+
+  .cal.is-in .cal__mark { animation: pop 0.45s cubic-bezier(0.3, 1.5, 0.5, 1) both; animation-delay: calc(0.2s + var(--i) * 0.05s); transform-box: fill-box; transform-origin: center; }
+  .js .cal:not(.is-in) .cal__mark { opacity: 0; }
+  .cal.is-in .cal__today { stroke-dasharray: 400; animation: draw 1s var(--ease) both; }
+
+  .ledger tbody tr { position: relative; }
+  .ledger tbody th { position: relative; }
+  .ledger tbody th::before {
+    content: "";
+    position: absolute;
+    left: -14px;
+    top: 18px;
+    bottom: 18px;
+    width: 3px;
+    background: var(--accent);
+    transform: scaleY(0);
+    transition: transform 0.3s var(--ease);
+  }
+  .ledger tbody tr:hover th::before { transform: scaleY(1); }
+  .ledger__ticker { transition: color 0.2s, letter-spacing 0.3s var(--ease); }
+  .ledger tbody tr:hover .ledger__ticker { letter-spacing: 0.01em; }
+
+  .toc a { transition: color 0.2s, padding-left 0.25s var(--ease); }
+  .toc a.is-active { padding-left: 6px; }
+  .watch__list li { transition: background-color 0.2s; }
+  .pager a { transition: transform 0.3s var(--ease), color 0.2s; }
+  .pager a[rel="prev"]:hover { transform: translateX(-6px); }
+  .pager a[rel="next"]:hover { transform: translateX(6px); }
+  .switch button { transition: background-color 0.25s, color 0.25s; }
+  .fig { transition: background-color 0.2s; }
+  .chapter li:hover > .fig, .chapter p:hover > .fig { background: var(--accent-soft); }
+}
+@media (max-width: 799px) { .ledger tbody th::before { display: none; } }
