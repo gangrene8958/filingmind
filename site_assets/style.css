@@ -724,3 +724,7 @@ mark.fig--flag {
   .chapter li:hover > .fig, .chapter p:hover > .fig { background: var(--accent-soft); }
 }
 @media (max-width: 799px) { .ledger tbody th::before { display: none; } }
+
+.watch__list p strong { font-weight: 600; }
+.watch__src a { color: var(--accent); text-decoration: none; margin-left: 2px; }
+.watch__src a:hover { text-decoration: underline; }

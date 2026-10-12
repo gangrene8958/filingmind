@@ -119,3 +119,9 @@ def test_pages_have_theme_toggle(tmp_path, monkeypatch):
     out = build_with(tmp_path, monkeypatch, ["AAPL"], {})
     page = (out / "index.html").read_text()
     assert 'class="theme"' in page and "fm-theme" in page and '<html lang="en">' in page
+
+
+def test_watch_list_never_cuts_a_sentence():
+    long = "First sentence about margins. " * 12
+    text = build_site.first_sentences(long.strip())
+    assert text.endswith("margins.") and len(text) <= 240 and "…" not in text

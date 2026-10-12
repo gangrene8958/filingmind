@@ -533,6 +533,17 @@ def timeline_svg(tickers: list[str], data: dict[str, Any], today: date) -> str:
     return "".join(parts)
 
 
+def first_sentences(text: str, limit: int = 240) -> str:
+    """Les primeres frases senceres que caben a `limit` caràcters (com a mínim una)."""
+    sentences = re.split(r"(?<=[a-z%)\d])[.;]\s+(?=[A-Z$(])", text.strip())
+    out = sentences[0]
+    for sentence in sentences[1:]:
+        if len(out) + len(sentence) + 2 > limit:
+            break
+        out = f"{out}. {sentence}"
+    return out if out.endswith((".", "!", "?")) else out + "."
+
+
 def watch_points(tickers: list[str], data: dict[str, Any]) -> str:
     """Primer punt de l'apartat d'alertes de l'informe més recent de cada empresa."""
     items = []
@@ -549,13 +560,19 @@ def watch_points(tickers: list[str], data: dict[str, Any]) -> str:
         text = bullets[0].rstrip(":")
         if len(text) < 30 and len(bullets) > 1:  # "Margins:" -> s'hi afegeix el primer detall.
             text = f"{text}: {bullets[1][:1].lower()}{bullets[1][1:]}"
-        if len(text) > 220:
-            text = text[:220].rsplit(" ", 1)[0] + "…"
         flagged = [u["token"] for u in record.get("unverified") or []]
+        label = re.match(r"^([^:$]{3,40}):\s+(.+)$", text)
+        if label:  # "Margin pressure: ..." -> el títol en negreta i el text a continuació.
+            rest = label.group(2)[:1].upper() + label.group(2)[1:]
+            body = f"<strong>{inline(label.group(1))}.</strong> {inline(first_sentences(rest), flagged)}"
+        else:
+            body = inline(first_sentences(text), flagged)
+        anchor = f"f-{record['form_type']}-c{chapters.index(flags) + 1}"
         items.append(
-            f'<li class="reveal"><a class="watch__ticker" href="{page_name(ticker)}#f-{record["form_type"]}">'
-            f'{esc(ticker)}</a><p>{inline(text, flagged)}</p>'
-            f'<span class="watch__src">{record["form_type"]} · {fmt_date_short(parse_date(record.get("filed")))}</span></li>'
+            f'<li class="reveal"><a class="watch__ticker" href="{page_name(ticker)}#{anchor}">'
+            f'{esc(ticker)}</a><p>{body}</p>'
+            f'<span class="watch__src">{record["form_type"]} · {fmt_date_short(parse_date(record.get("filed")))}'
+            f' · <a href="{page_name(ticker)}#{anchor}">All red flags&nbsp;→</a></span></li>'
         )
     if not items:
         return ""
