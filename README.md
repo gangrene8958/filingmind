@@ -6,6 +6,21 @@ FilingMind watches a stock portfolio for new **10-K** and **10-Q** filings on SE
 
 *Versió en català: [README.ca.md](README.ca.md).*
 
+<p align="center">
+  <img src="assets/dashboard-portfolio.png" alt="FilingMind dashboard: portfolio ledger with latest 10-K and 10-Q per company and fact-check counts" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="62%"><img src="assets/dashboard-company.png" alt="Company page for MSFT with key figures from the latest 10-Q"></td>
+    <td width="38%"><img src="assets/telegram-summary.png" alt="Telegram message with the MSFT 10-Q executive summary"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Company page: key figures and a link to the filing on EDGAR</sub></td>
+    <td align="center"><sub>The same summary delivered to Telegram</sub></td>
+  </tr>
+</table>
+
 ## Why it exists
 
 LLMs are good at condensing a 100-page filing into one page, but they can misquote numbers, and in a financial summary a wrong number is worse than no summary. FilingMind treats the model's output as untrusted: a deterministic checker (no LLM involved) confirms that every figure the model cites actually appears in the source document before the summary goes out.
@@ -13,7 +28,7 @@ LLMs are good at condensing a 100-page filing into one page, but they can misquo
 ## Results so far
 
 - The portfolio tracks AAPL, MSFT and AMZN. The latest 10-K and 10-Q for each, 6 filings in all, have been summarized ([`data/filings.json`](data/filings.json)).
-- Each summary cites dozens of figures (revenue by segment and region, margins, operating expenses, tax rates, and so on).
+- Across those 6 summaries the checker verified **349 figures** (revenue by segment and region, margins, operating expenses, EPS, tax rates, and so on). The dashboard shows the per-filing count, e.g. 52/52 for Apple's 10-K.
 - **None of the 6 summaries ended with an unverified figure** after the checker and its single correction pass.
 - 30 unit tests cover the number checker, the dashboard builder and the main processing loop. They run in CI before any filing is processed.
 
