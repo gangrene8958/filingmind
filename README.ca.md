@@ -1,5 +1,7 @@
 # FilingMind
 
+*English version: [README.md](README.md).*
+
 Audita automàticament els nous filings **10-K** i **10-Q** de la SEC per a una cartera d'accions, en genera un resum executiu amb Claude (API d'Anthropic) i l'envia per Telegram. S'executa cada dia laborable amb GitHub Actions.
 
 ## Com funciona
