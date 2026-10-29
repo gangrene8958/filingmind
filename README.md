@@ -1,103 +1,129 @@
 # FilingMind
 
-Audita automàticament els nous filings **10-K** i **10-Q** de la SEC per a una cartera d'accions, en genera un resum executiu amb Claude (API d'Anthropic) i l'envia per Telegram. S'executa cada dia laborable amb GitHub Actions.
+**LLM summaries of SEC filings that check their own numbers.**
 
-## Com funciona
+FilingMind watches a stock portfolio for new **10-K** and **10-Q** filings on SEC EDGAR, has Claude (Anthropic API) write an executive summary of each one, verifies every figure in that summary against the original filing, and delivers it to Telegram and a static web dashboard. It runs every weekday on GitHub Actions.
 
-1. `main.py` llegeix els tickers de `portfolio.json`.
-2. Consulta el feed Atom d'EDGAR de cada ticker per a 10-K i 10-Q.
-3. Si troba un filing que no és a `processed_filings.json`, en descarrega el document principal, el neteja (taules convertides a Markdown) i n'extreu les seccions *Risk Factors* i *MD&A*.
-4. Claude en genera un resum: evolució del negoci, 3 riscos principals, canvis estratègics i alertes financeres.
-5. El resum s'envia a Telegram (dividit en blocs de 4.096 caràcters si cal) i el filing es marca com a processat.
-6. El workflow fa commit de `processed_filings.json` perquè l'estat es mantingui entre execucions.
+*Versió en català: [README.ca.md](README.ca.md).*
 
-### Verificació de xifres
+## Why it exists
 
-Abans d'enviar cada resum, `verify_numbers.py` comprova que totes les xifres del resum apareguin al document original. Accepta arrodoniments i canvis d'escala: per exemple, "$391.0 billion" es dona per bo si el document diu "391,035" milions. S'ignoren els anys, els comptadors petits ("3 riscos") i les referències com "10-K" o "Item 1A".
+LLMs are good at condensing a 100-page filing into one page, but they can misquote numbers, and in a financial summary a wrong number is worse than no summary. FilingMind treats the model's output as untrusted: a deterministic checker (no LLM involved) confirms that every figure the model cites actually appears in the source document before the summary goes out.
 
-- Si alguna xifra no surt al document, es demana a Claude que corregeixi el resum, només una vegada.
-- Si després de la correcció encara en queda alguna, el resum s'envia igualment però amb un avís "⚠️ Xifres no verificades" que les llista.
+## Results so far
 
-La comprovació és determinista, sense cap LLM. Té dues limitacions: marca com a no verificades les xifres calculades pel model (el prompt li prohibeix calcular-ne), i les xifres petites, com els percentatges, gairebé sempre troben alguna coincidència en un document llarg. Per això és especialment útil per a imports.
+- The portfolio tracks AAPL, MSFT and AMZN. The latest 10-K and 10-Q for each, 6 filings in all, have been summarized ([`data/filings.json`](data/filings.json)).
+- Each summary cites dozens of figures (revenue by segment and region, margins, operating expenses, tax rates, and so on).
+- **None of the 6 summaries ended with an unverified figure** after the checker and its single correction pass.
+- 30 unit tests cover the number checker, the dashboard builder and the main processing loop. They run in CI before any filing is processed.
 
-El workflow executa els tests (`pytest tests`) abans de processar els filings.
+## How it works
 
-Si un filing falla (xarxa, API, Telegram), no es marca com a processat i es torna a intentar a la següent execució.
+```
+portfolio.json ─► EDGAR Atom feeds ─► new 10-K / 10-Q?
+                                          │
+                                          ▼
+                     download main document, clean HTML,
+                     convert tables to Markdown, extract
+                     Item 1A (Risk Factors) + MD&A
+                                          │
+                                          ▼
+                     Claude writes executive summary
+                                          │
+                                          ▼
+                     verify_numbers.py: every figure in the
+                     summary must appear in the filing ──fail──► ask Claude to correct (once)
+                                          │                               │
+                                          ▼                               ▼
+                     Telegram message + static dashboard   still failing → send with a
+                     + processed_filings.json committed     "⚠️ Unverified figures" warning
+```
 
-## Dashboard web
+1. `main.py` reads the tickers from `portfolio.json`.
+2. It polls the EDGAR Atom feed for each ticker's 10-K and 10-Q filings.
+3. For each filing not yet listed in `processed_filings.json`, it downloads the main document, cleans it (tables become Markdown) and extracts the *Risk Factors* and *MD&A* sections.
+4. Claude writes a summary covering business performance, the three main risks, strategic changes and financial red flags.
+5. The summary is sent to Telegram (split into 4,096-character chunks if needed) and the filing is marked as processed.
+6. The workflow commits `processed_filings.json` so state persists between runs. If anything fails (network, API, Telegram), the filing is not marked and is retried on the next run.
 
-Cada execució genera també un petit web estàtic amb `build_site.py`:
+### Number verification
 
-- **Cartera:** un llibre amb l'últim 10-K i 10-Q de cada empresa, una xifra destacada i l'estat de la verificació; els punts a vigilar de l'informe més recent; i un calendari de presentacions amb la propera estimada.
-- **Una pàgina per empresa:** el 10-K i el 10-Q (amb un selector), les xifres destacades, el segell de verificació, un índex per apartats i l'enllaç al document a EDGAR. Les xifres no trobades al document surten marcades en vermell.
+`verify_numbers.py` checks that every figure in the summary appears in the source document. It tolerates rounding and changes of scale: "$391.0 billion" passes if the filing says "391,035" (in millions). Years, small counters ("3 risks") and references such as "10-K" or "Item 1A" are ignored.
 
-El web i els resums són en anglès. El disseny és a `site_assets/` (`style.css` i `app.js`) i es copia a cada generació: té mode clar/fosc (segueix el sistema o el botó de la capçalera), transicions entre pàgines i animacions suaus que es desactiven si el sistema demana menys moviment. Les pàgines funcionen també sense JavaScript.
+- If a figure is missing from the document, Claude is asked to correct the summary, once.
+- If any figure is still unverified after that, the summary is sent anyway with a "⚠️ Unverified figures" warning that lists them.
 
-Les pestanyes i les pàgines surten de `portfolio.json`. Si hi afegeixes un ticker, el workflow s'executa automàticament: resumeix els seus filings, els envia per Telegram i afegeix la pàgina. Si en treus un, la seva pàgina desapareix.
+Known limitations: figures the model computes itself are flagged as unverified (the prompt forbids it from computing them), and small numbers such as percentages almost always find some match in a long document. The check is therefore strongest for monetary amounts.
 
-Els resums es desen a `data/filings.json`. Els filings que ja s'havien enviat abans que existís el dashboard es resumeixen una vegada per omplir-lo, però no es tornen a enviar per Telegram.
+## Dashboard
 
-### Veure el dashboard
+Every run also builds a small static site with `build_site.py`:
 
-- **Sense configurar res:** a cada execució, a la pestanya **Actions**, obre l'execució i descarrega l'artefacte **dashboard**. És un zip: descomprimeix-lo i obre `index.html`.
-- **Com a web amb URL fixa (GitHub Pages):**
-  1. Cal que el repo sigui públic, o tenir GitHub Pro si és privat. En tots dos casos, la pàgina publicada és pública.
-  2. Ves a **Settings → Pages** i, a *Source*, tria **GitHub Actions**.
-  3. A partir de la propera execució, el dashboard es publica a `https://<usuari>.github.io/filingmind/`.
+- **Portfolio:** the latest 10-K and 10-Q for each company, a headline figure and its verification status, the latest watch points, and a filing calendar with the next estimated filing date.
+- **One page per company:** 10-K and 10-Q (with a selector), key figures, the verification badge, a section index and a link to the filing on EDGAR. Unverified figures are highlighted in red.
 
-## Configuració
+The design lives in `site_assets/` (light/dark mode, page transitions, reduced-motion support) and the pages also work without JavaScript. Adding or removing a ticker in `portfolio.json` triggers the workflow and adds or removes its page.
 
-### 1. Crear el bot de Telegram
+To view it, either download the **dashboard** artifact from any run under the **Actions** tab, or enable GitHub Pages (**Settings → Pages → Source: GitHub Actions**) to publish it at `https://<user>.github.io/filingmind/`.
 
-1. Parla amb [@BotFather](https://t.me/BotFather), envia `/newbot` i desa el **token**.
-2. Envia qualsevol missatge al teu bot.
-3. Obre `https://api.telegram.org/bot<TOKEN>/getUpdates` i copia el valor de `chat.id`: és el **chat ID**.
+## Tech stack
 
-### 2. Configurar els GitHub Secrets
+Python 3.11 · Anthropic API (Claude, adaptive thinking) · feedparser · requests · BeautifulSoup · pytest · GitHub Actions · GitHub Pages · Telegram Bot API
 
-Al repositori: **Settings → Secrets and variables → Actions → New repository secret**.
+## Setup
 
-| Secret | Descripció |
+### 1. Create a Telegram bot
+
+1. Message [@BotFather](https://t.me/BotFather), send `/newbot` and save the **token**.
+2. Send any message to your bot.
+3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy the `chat.id` value. That is the **chat ID**.
+
+### 2. Add GitHub secrets
+
+**Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Description |
 |---|---|
-| `ANTHROPIC_API_KEY` | Clau de l'API d'Anthropic ([console.anthropic.com](https://console.anthropic.com)). |
-| `TELEGRAM_BOT_TOKEN` | Token del bot que t'ha donat BotFather. |
-| `TELEGRAM_CHAT_ID` | ID del xat on s'enviaran els resums. |
-| `SEC_USER_AGENT` | Identificació obligatòria per a la SEC, amb nom i correu: `Nom Cognom correu@exemple.com`. Sense això la SEC retorna 403. |
+| `ANTHROPIC_API_KEY` | Anthropic API key ([console.anthropic.com](https://console.anthropic.com)). |
+| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather. |
+| `TELEGRAM_CHAT_ID` | Chat that receives the summaries. |
+| `SEC_USER_AGENT` | Identification the SEC requires, with name and email: `First Last email@example.com`. Without it the SEC returns 403. |
 
-Opcional, a la pestanya **Variables** (no secrets):
+Optional, under the **Variables** tab:
 
-| Variable | Descripció |
+| Variable | Description |
 |---|---|
-| `ANTHROPIC_MODEL` | Model de Claude. Per defecte `claude-sonnet-5-5`. |
-| `PUBLISH_PAGES` | `false` per no publicar el dashboard a GitHub Pages (per defecte es publica). |
-| `ANTHROPIC_WORKSPACE_ID` | Només si la clau de l'API no està associada a cap workspace (error 400 "not scoped to a workspace"). És l'ID del workspace (`wrkspc_...`) que surt a la consola d'Anthropic. |
+| `ANTHROPIC_MODEL` | Claude model. Defaults to `claude-sonnet-5-5`. |
+| `PUBLISH_PAGES` | `false` to skip publishing the dashboard to GitHub Pages (published by default). |
+| `ANTHROPIC_WORKSPACE_ID` | Only needed if the API key is not tied to a workspace (error 400 "not scoped to a workspace"). |
 
-### 3. Permisos del workflow
+### 3. Workflow permissions
 
-El workflow ja declara `permissions: contents: write`. Si el repositori o l'organització restringeixen els permisos per defecte, comprova a **Settings → Actions → General → Workflow permissions** que estigui marcat *Read and write permissions*.
+The workflow declares `permissions: contents: write`. If your repository or organization restricts default permissions, check **Settings → Actions → General → Workflow permissions** is set to *Read and write permissions*.
 
-### 4. Cartera
+### 4. Portfolio
 
-Edita `portfolio.json`:
+Edit `portfolio.json`:
 
 ```json
 ["AAPL", "MSFT", "GOOGL", "NVDA"]
 ```
 
-## Execució
+## Running
 
-- **Automàtica:** de dilluns a divendres a les 22:00 UTC.
-- **Manual:** pestanya **Actions → SEC Filings Monitor → Run workflow**.
-- **En local:**
+- **Scheduled:** Monday to Friday at 22:00 UTC.
+- **Manual:** **Actions → SEC Filings Monitor → Run workflow**.
+- **Locally:**
 
 ```bash
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=... TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... SEC_USER_AGENT="Nom correu@exemple.com"
+export ANTHROPIC_API_KEY=... TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... SEC_USER_AGENT="Name email@example.com"
 python main.py
+pytest tests
 ```
 
 ## Notes
 
-- A cada execució només es revisa el filing més recent de cada ticker i tipus (variable `MAX_ENTRIES_PER_FEED`, per defecte 1). Així, la primera execució envia un resum de l'últim 10-K i l'últim 10-Q de cada empresa, no de tot l'historial.
-- El model per defecte fa servir raonament adaptatiu (*adaptive thinking*) en lloc de fixar la temperatura, ja que els models actuals no admeten temperatures personalitzades amb el raonament activat.
-- Cada filing és una crida a l'API amb fins a 250.000 caràcters de text; tingues-ho en compte pel cost si la cartera és gran.
+- Each run only checks the most recent filing per ticker and form type (`MAX_ENTRIES_PER_FEED`, default 1), so the first run summarizes the latest 10-K and 10-Q of each company, not the full history.
+- The default model uses adaptive thinking instead of a fixed temperature.
+- Each filing is one API call with up to 250,000 characters of text, so keep cost in mind for large portfolios.
